@@ -34,8 +34,8 @@ const ProtectedRoute = ({ children }) => {
 function App() {
     return (
         <ThemeProvider>
-            <AuthProvider>
-                <Router>
+            <Router>
+                <AuthProvider>
                     <Routes>
                         {/* Public Routes */}
                         <Route path="/login" element={<Login />} />
@@ -73,7 +73,7 @@ function App() {
                         {/* 404 */}
                         <Route path="*" element={<Navigate to="/dashboard" />} />
                     </Routes>
-                </Router>
+                </AuthProvider>
 
                 {/* Toast Notifications */}
                 <ToastContainer
@@ -88,7 +88,7 @@ function App() {
                     pauseOnHover
                     theme="colored"
                 />
-            </AuthProvider>
+            </Router>
         </ThemeProvider>
     );
 }
