@@ -1,14 +1,17 @@
 {
   "name": "quicktask-backend",
   "version": "1.0.0",
-  "description": "QuickTask Backend API - Node.js + Express + MongoDB",
+  "description": "QuickTask Backend API - Node.js + Express + PostgreSQL",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed": "node seed.js"
+    "seed": "node seed.js",
+    "postinstall": "npx prisma generate",
+    "db:push": "npx prisma db push",
+    "build": "cd ../frontend && npm install && npm run build"
   },
-  "keywords": ["task-management", "express", "mongodb", "jwt"],
+  "keywords": ["task-management", "express", "postgresql", "prisma", "jwt"],
   "author": "",
   "license": "MIT",
   "dependencies": {
