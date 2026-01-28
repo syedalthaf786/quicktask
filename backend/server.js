@@ -38,13 +38,16 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Serve static files from frontend build in production
-if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.join(__dirname, '../frontend/dist')));
+// Serve static files from frontend build
+const frontendDistPath = path.join(__dirname, '../frontend/dist');
+if (require('fs').existsSync(frontendDistPath)) {
+    app.use(express.static(frontendDistPath));
     
     app.get('*', (req, res) => {
-        res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+        res.sendFile(path.join(frontendDistPath, 'index.html'));
     });
+} else {
+    console.log('⚠️  Frontend build not found. Run `cd ../frontend && npm run build`');
 }
 
 // 404 handler
