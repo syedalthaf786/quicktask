@@ -8,7 +8,7 @@
     "dev": "nodemon server.js",
     "seed": "node seed.js",
     "postinstall": "npx prisma generate",
-    "db:push": "npx prisma db push",
+    "prisma:deploy": "npx prisma db push",
     "build": "cd ../frontend && npm install && npm run build"
   },
   "keywords": ["task-management", "express", "postgresql", "prisma", "jwt"],
