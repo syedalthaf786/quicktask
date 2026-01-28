@@ -1,8 +1,18 @@
 import axios from 'axios';
 
+// Determine API URL based on environment
+const getApiUrl = () => {
+    // In production, use relative path (same domain)
+    if (import.meta.env.PROD) {
+        return '/api';
+    }
+    // In development, use environment variable or default
+    return import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+};
+
 // Create axios instance
 const api = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+    baseURL: getApiUrl(),
     headers: {
         'Content-Type': 'application/json'
     }
