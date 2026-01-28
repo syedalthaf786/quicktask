@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
 import { toast } from 'react-toastify';
 
@@ -15,6 +16,7 @@ export const useAuth = () => {
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
+    const navigate = useNavigate();
 
     useEffect(() => {
         // Check if user is logged in on mount
@@ -55,6 +57,7 @@ export const AuthProvider = ({ children }) => {
         authService.logout();
         setUser(null);
         toast.info('You have been logged out.');
+        navigate('/login', { replace: true });
     };
 
     const value = {
