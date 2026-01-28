@@ -1,1 +1,1 @@
-web: npx prisma db push && node server.js
+web: node server.js

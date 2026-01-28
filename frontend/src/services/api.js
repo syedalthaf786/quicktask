@@ -2,12 +2,12 @@ import axios from 'axios';
 
 // Determine API URL based on environment
 const getApiUrl = () => {
-    // In production, use relative path (same domain)
-    if (import.meta.env.PROD) {
-        return '/api';
+    // Use environment variable if set (for Vercel/Netlify deployment)
+    if (import.meta.env.VITE_API_URL) {
+        return import.meta.env.VITE_API_URL;
     }
-    // In development, use environment variable or default
-    return import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    // Fall back to relative path (for same-domain deployment)
+    return '/api';
 };
 
 // Create axios instance
