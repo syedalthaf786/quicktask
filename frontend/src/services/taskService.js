@@ -43,5 +43,17 @@ export const taskService = {
     getStats: async () => {
         const response = await api.get('/tasks/stats/summary');
         return response.data;
+    },
+
+    // Add comment to task
+    addComment: async (taskId, content) => {
+        const response = await api.post(`/tasks/${taskId}/comments`, { content });
+        return response.data;
+    },
+
+    // Delete comment
+    deleteComment: async (taskId, commentId) => {
+        const response = await api.delete(`/tasks/${taskId}/comments/${commentId}`);
+        return response.data;
     }
 };

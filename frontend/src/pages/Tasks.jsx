@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { taskService } from '../services/taskService';
+import { teamService } from '../services/teamService';
 import { useAuth } from '../context/AuthContext';
 import { exportUtils } from '../utils/exportUtils';
 import Navbar from '../components/Navbar';
@@ -14,7 +15,10 @@ import {
     Calendar,
     AlertCircle,
     X,
-    ArrowUpDown
+    ArrowUpDown,
+    User,
+    MessageCircle,
+    Send
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { format, isPast, differenceInDays } from 'date-fns';
@@ -27,6 +31,7 @@ const Tasks = () => {
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
+    const [permissions, setPermissions] = useState(null);
     const [filters, setFilters] = useState({
         status: 'all',
         priority: 'all',
@@ -37,28 +42,82 @@ const Tasks = () => {
         description: '',
         priority: 'Medium',
         status: 'Todo',
-        dueDate: ''
+        dueDate: '',
+        assigneeId: ''
     });
 
     const [sortBy, setSortBy] = useState('createdAt');
     const [order, setOrder] = useState('desc');
 
+    const [teams, setTeams] = useState([]);
+    const [selectedTeam, setSelectedTeam] = useState(null);
+    const [teamMembers, setTeamMembers] = useState([]);
+
+    const [comments, setComments] = useState([]);
+    const [newComment, setNewComment] = useState('');
+    const [showStatusModal, setShowStatusModal] = useState(false);
+    const [statusReason, setStatusReason] = useState('');
+    const [pendingStatus, setPendingStatus] = useState('');
+
+    const [isFirstRun, setIsFirstRun] = useState(true);
+
     useEffect(() => {
-        fetchTasks();
+        if (isFirstRun) {
+            fetchTasks();
+            fetchTeams();
+            setIsFirstRun(false);
+        }
     }, [filters, sortBy, order]);
+
+    useEffect(() => {
+        if (selectedTeam) {
+            fetchTeamMembers(selectedTeam);
+        }
+    }, [selectedTeam]);
+
+    const fetchTeams = async () => {
+        try {
+            const data = await teamService.getMyTeams();
+            setTeams(data.teams);
+        } catch (error) {
+            console.error('Failed to fetch teams');
+        }
+    };
+
+    const fetchTeamMembers = async (teamId) => {
+        try {
+            const data = await teamService.getTeamMembers(teamId);
+            setTeamMembers(data.members);
+        } catch (error) {
+            console.error('Failed to fetch team members');
+            setTeamMembers([]);
+        }
+    };
 
     const fetchTasks = async () => {
         try {
             setLoading(true);
+            console.log('Fetching tasks with filters:', filters);
+            
             const data = await taskService.getTasks({
                 ...filters,
                 sortBy,
                 order
             });
+
+            console.log('Tasks response:', data);
+
+            // Validate response
+            if (!data || !data.success) {
+                console.error('Tasks API error:', data);
+                throw new Error(data?.message || 'Failed to fetch tasks');
+            }
+
             setTasks(data.tasks);
             setFilteredTasks(data.tasks);
         } catch (error) {
-            toast.error('Failed to fetch tasks');
+            console.error('Error fetching tasks:', error);
+            toast.error(error.message || 'Failed to fetch tasks');
         } finally {
             setLoading(false);
         }
@@ -69,7 +128,23 @@ const Tasks = () => {
 
         try {
             if (editingTask) {
-                await taskService.updateTask(editingTask.id || editingTask._id, formData);
+                // If not creator, only send status
+                if (!permissions?.canEdit) {
+                    // Check if status is changing
+                    if (formData.status !== editingTask.status) {
+                        // If marking as not completed (Todo or In Progress), require reason
+                        if (formData.status !== 'Completed' && editingTask.status === 'Completed') {
+                            setPendingStatus(formData.status);
+                            setShowStatusModal(true);
+                            return;
+                        }
+                        await taskService.updateTask(editingTask.id, { status: formData.status });
+                    } else {
+                        await taskService.updateTask(editingTask.id, { status: formData.status });
+                    }
+                } else {
+                    await taskService.updateTask(editingTask.id, formData);
+                }
                 toast.success('Task updated successfully');
             } else {
                 await taskService.createTask(formData);
@@ -80,6 +155,30 @@ const Tasks = () => {
             fetchTasks();
         } catch (error) {
             toast.error(error.response?.data?.message || 'Failed to save task');
+        }
+    };
+
+    const handleStatusWithReason = async () => {
+        if (!statusReason.trim()) {
+            toast.error('Please provide a reason for status change');
+            return;
+        }
+
+        try {
+            // Update status first
+            await taskService.updateTask(editingTask.id, { status: pendingStatus });
+            
+            // Add comment with reason
+            await taskService.addComment(editingTask.id, `Status changed to ${pendingStatus}. Reason: ${statusReason}`);
+            
+            toast.success('Task updated with reason');
+            setShowStatusModal(false);
+            setStatusReason('');
+            setPendingStatus('');
+            closeModal();
+            fetchTasks();
+        } catch (error) {
+            toast.error('Failed to update task');
         }
     };
 
@@ -95,25 +194,47 @@ const Tasks = () => {
         }
     };
 
-    const openModal = (task = null) => {
+    const openModal = async (task = null) => {
         if (task) {
-            setEditingTask(task);
-            setFormData({
-                title: task.title,
-                description: task.description || '',
-                priority: task.priority,
-                status: task.status,
-                dueDate: format(new Date(task.dueDate), 'yyyy-MM-dd')
-            });
+            // Fetch task details with permissions
+            try {
+                const data = await taskService.getTask(task.id);
+                setEditingTask(data.task);
+                setPermissions(data.permissions);
+                setComments(data.task.comments || []);
+                
+                setFormData({
+                    title: data.task.title,
+                    description: data.task.description || '',
+                    priority: data.task.priority,
+                    status: data.task.status,
+                    dueDate: format(new Date(data.task.dueDate), 'yyyy-MM-dd'),
+                    assigneeId: data.task.assigneeId || ''
+                });
+
+                if (data.task.teamId) {
+                    setSelectedTeam(data.task.teamId.toString());
+                    fetchTeamMembers(data.task.teamId);
+                } else {
+                    setSelectedTeam(null);
+                }
+            } catch (error) {
+                toast.error('Failed to fetch task details');
+                return;
+            }
         } else {
             setEditingTask(null);
+            setPermissions(null);
+            setComments([]);
             setFormData({
                 title: '',
                 description: '',
                 priority: 'Medium',
                 status: 'Todo',
-                dueDate: ''
+                dueDate: '',
+                assigneeId: ''
             });
+            setSelectedTeam(null);
         }
         setShowModal(true);
     };
@@ -121,6 +242,35 @@ const Tasks = () => {
     const closeModal = () => {
         setShowModal(false);
         setEditingTask(null);
+        setPermissions(null);
+        setComments([]);
+        setNewComment('');
+    };
+
+    const handleAddComment = async (e) => {
+        e.preventDefault();
+        if (!newComment.trim()) return;
+
+        try {
+            const data = await taskService.addComment(editingTask.id, newComment);
+            setComments([data.comment, ...comments]);
+            setNewComment('');
+            toast.success('Comment added');
+        } catch (error) {
+            toast.error('Failed to add comment');
+        }
+    };
+
+    const handleDeleteComment = async (commentId) => {
+        if (!window.confirm('Delete this comment?')) return;
+
+        try {
+            await taskService.deleteComment(editingTask.id, commentId);
+            setComments(comments.filter(c => c.id !== commentId));
+            toast.success('Comment deleted');
+        } catch (error) {
+            toast.error('Failed to delete comment');
+        }
     };
 
     const getDueDateStatus = (dueDate, status) => {
@@ -131,6 +281,9 @@ const Tasks = () => {
         if (daysLeft <= 3) return 'due-soon';
         return 'normal';
     };
+
+    // Check if current user is creator
+    const isCreator = editingTask && permissions?.canEdit;
 
     return (
         <div className="page-container">
@@ -262,13 +415,15 @@ const Tasks = () => {
                                             >
                                                 <Edit2 size={16} />
                                             </button>
-                                            <button
-                                                className="task-action-btn delete"
-                                                onClick={() => handleDelete(task.id || task._id)}
-                                                title="Delete"
-                                            >
-                                                <Trash2 size={16} />
-                                            </button>
+                                            {task.creatorId === user?.id && (
+                                                <button
+                                                    className="task-action-btn delete"
+                                                    onClick={() => handleDelete(task.id || task._id)}
+                                                    title="Delete"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
 
@@ -297,6 +452,15 @@ const Tasks = () => {
                                         <div className="task-warning">
                                             <AlertCircle size={14} />
                                             Due in {differenceInDays(new Date(task.dueDate), new Date())} days
+                                        </div>
+                                    )}
+
+                                    {task.assignee && (
+                                        <div className="task-assignee">
+                                            <div className="assignee-avatar">
+                                                {task.assignee.name.charAt(0).toUpperCase()}
+                                            </div>
+                                            <span>Assigned to {task.assignee.name}</span>
                                         </div>
                                     )}
                                 </motion.div>
@@ -329,6 +493,7 @@ const Tasks = () => {
                                 </div>
 
                                 <form onSubmit={handleSubmit} className="modal-form">
+                                    {/* Read-only fields for team members */}
                                     <div className="input-group">
                                         <label className="input-label">Title *</label>
                                         <input
@@ -338,6 +503,8 @@ const Tasks = () => {
                                             onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                                             required
                                             placeholder="Enter task title"
+                                            disabled={!isCreator}
+                                            readOnly={!isCreator}
                                         />
                                     </div>
 
@@ -349,6 +516,8 @@ const Tasks = () => {
                                             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                                             placeholder="Add task description (optional)"
                                             rows="3"
+                                            disabled={!isCreator}
+                                            readOnly={!isCreator}
                                         />
                                     </div>
 
@@ -360,6 +529,7 @@ const Tasks = () => {
                                                 value={formData.priority}
                                                 onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
                                                 required
+                                                disabled={!isCreator}
                                             >
                                                 <option value="Low">Low</option>
                                                 <option value="Medium">Medium</option>
@@ -391,8 +561,90 @@ const Tasks = () => {
                                             onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
                                             required
                                             min={format(new Date(), 'yyyy-MM-dd')}
+                                            disabled={!isCreator}
+                                            readOnly={!isCreator}
                                         />
                                     </div>
+
+                                    {/* Team and Assignee Selection */}
+                                    {isCreator && (
+                                        <div className="form-row">
+                                            <div className="input-group">
+                                                <label className="input-label">Team (Optional)</label>
+                                                <select
+                                                    className="input select"
+                                                    value={selectedTeam || ''}
+                                                    onChange={(e) => {
+                                                        setSelectedTeam(e.target.value);
+                                                        setFormData({ ...formData, assigneeId: '' });
+                                                    }}
+                                                >
+                                                    <option value="">No Team (Personal Task)</option>
+                                                    {teams.map(team => (
+                                                        <option key={team.id} value={team.id}>{team.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {selectedTeam && (
+                                                <div className="input-group">
+                                                    <label className="input-label">Assign To</label>
+                                                    <select
+                                                        className="input select"
+                                                        value={formData.assigneeId}
+                                                        onChange={(e) => setFormData({ ...formData, assigneeId: e.target.value })}
+                                                    >
+                                                        <option value="">Unassigned</option>
+                                                        {teamMembers.map(member => (
+                                                            <option key={member.user.id} value={member.user.id}>
+                                                                {member.user.name}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* For new tasks or team tasks without editing, show team selection */}
+                                    {!editingTask && (
+                                        <div className="form-row">
+                                            <div className="input-group">
+                                                <label className="input-label">Team (Optional)</label>
+                                                <select
+                                                    className="input select"
+                                                    value={selectedTeam || ''}
+                                                    onChange={(e) => {
+                                                        setSelectedTeam(e.target.value);
+                                                        setFormData({ ...formData, assigneeId: '' });
+                                                    }}
+                                                >
+                                                    <option value="">No Team (Personal Task)</option>
+                                                    {teams.map(team => (
+                                                        <option key={team.id} value={team.id}>{team.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {selectedTeam && (
+                                                <div className="input-group">
+                                                    <label className="input-label">Assign To</label>
+                                                    <select
+                                                        className="input select"
+                                                        value={formData.assigneeId}
+                                                        onChange={(e) => setFormData({ ...formData, assigneeId: e.target.value })}
+                                                    >
+                                                        <option value="">Unassigned</option>
+                                                        {teamMembers.map(member => (
+                                                            <option key={member.user.id} value={member.user.id}>
+                                                                {member.user.name}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
 
                                     <div className="modal-actions">
                                         <button type="button" className="btn btn-outline" onClick={closeModal}>
@@ -403,6 +655,118 @@ const Tasks = () => {
                                         </button>
                                     </div>
                                 </form>
+
+                                {/* Comments Section */}
+                                {editingTask && permissions?.canComment && (
+                                    <div className="comments-section">
+                                        <div className="comments-header">
+                                            <MessageCircle size={20} />
+                                            <h3>Comments ({comments.length})</h3>
+                                        </div>
+
+                                        {/* Add Comment Form */}
+                                        <form onSubmit={handleAddComment} className="comment-form">
+                                            <div className="input-group">
+                                                <textarea
+                                                    className="input"
+                                                    value={newComment}
+                                                    onChange={(e) => setNewComment(e.target.value)}
+                                                    placeholder="Add a comment..."
+                                                    rows="2"
+                                                />
+                                            </div>
+                                            <button type="submit" className="btn btn-primary btn-sm">
+                                                <Send size={16} />
+                                                Send
+                                            </button>
+                                        </form>
+
+                                        {/* Comments List */}
+                                        <div className="comments-list">
+                                            {comments.length === 0 ? (
+                                                <p className="no-comments">No comments yet. Be the first to comment!</p>
+                                            ) : (
+                                                comments.map(comment => (
+                                                    <div key={comment.id} className="comment">
+                                                        <div className="comment-header">
+                                                            <div className="comment-avatar">
+                                                                {comment.user.name.charAt(0).toUpperCase()}
+                                                            </div>
+                                                            <div className="comment-info">
+                                                                <span className="comment-author">{comment.user.name}</span>
+                                                                <span className="comment-date">
+                                                                    {format(new Date(comment.createdAt), 'MMM dd, yyyy HH:mm')}
+                                                                </span>
+                                                            </div>
+                                                            {comment.userId === user?.id && (
+                                                                <button
+                                                                    className="comment-delete"
+                                                                    onClick={() => handleDeleteComment(comment.id)}
+                                                                >
+                                                                    <Trash2 size={14} />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                        <p className="comment-content">{comment.content}</p>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </motion.div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                {/* Status Change Reason Modal */}
+                <AnimatePresence>
+                    {showStatusModal && (
+                        <motion.div
+                            className="modal-overlay"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setShowStatusModal(false)}
+                        >
+                            <motion.div
+                                className="modal"
+                                initial={{ scale: 0.9, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                exit={{ scale: 0.9, opacity: 0 }}
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ maxWidth: '400px' }}
+                            >
+                                <div className="modal-header">
+                                    <h2>Status Change Reason</h2>
+                                    <button className="modal-close" onClick={() => setShowStatusModal(false)}>
+                                        <X size={24} />
+                                    </button>
+                                </div>
+                                <div className="modal-form">
+                                    <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)' }}>
+                                        Please provide a reason for changing the task status to <strong>{pendingStatus}</strong>.
+                                    </p>
+                                    <div className="input-group">
+                                        <label className="input-label">Reason *</label>
+                                        <textarea
+                                            className="input"
+                                            value={statusReason}
+                                            onChange={(e) => setStatusReason(e.target.value)}
+                                            placeholder="Explain why the status is being changed..."
+                                            rows="3"
+                                            required
+                                        />
+                                    </div>
+                                    <div className="modal-actions">
+                                        <button type="button" className="btn btn-outline" onClick={() => setShowStatusModal(false)}>
+                                            Cancel
+                                        </button>
+                                        <button type="button" className="btn btn-primary" onClick={handleStatusWithReason}>
+                                            Submit Reason
+                                        </button>
+                                    </div>
+                                </div>
                             </motion.div>
                         </motion.div>
                     )}

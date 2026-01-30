@@ -27,22 +27,41 @@ const Dashboard = () => {
 
     const fetchDashboardData = async () => {
         try {
+            setLoading(true);
+            console.log('Fetching dashboard data...');
+            
             const [statsData, tasksData] = await Promise.all([
                 taskService.getStats(),
                 taskService.getTasks({ sortBy: 'createdAt', order: 'desc' })
             ]);
 
+            console.log('Stats response:', statsData);
+            console.log('Tasks response:', tasksData);
+
+            // Validate stats data
+            if (!statsData || !statsData.success) {
+                console.error('Stats API error:', statsData);
+                throw new Error(statsData?.message || 'Failed to fetch stats');
+            }
+
+            // Validate tasks data
+            if (!tasksData || !tasksData.success) {
+                console.error('Tasks API error:', tasksData);
+                throw new Error(tasksData?.message || 'Failed to fetch tasks');
+            }
+
             setStats(statsData.stats);
             setRecentTasks(tasksData.tasks.slice(0, 5));
 
             // Show alert for overdue tasks
-            if (statsData.stats.overdue > 0) {
+            if (statsData.stats && statsData.stats.overdue > 0) {
                 toast.warning(`You have ${statsData.stats.overdue} overdue task(s)!`, {
                     toastId: 'overdue-alert' // Prevent duplicate toasts
                 });
             }
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
+            toast.error(error.message || 'Failed to load dashboard data');
         } finally {
             setLoading(false);
         }

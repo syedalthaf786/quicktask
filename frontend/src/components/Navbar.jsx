@@ -9,7 +9,8 @@ import {
     Sun,
     LogOut,
     User,
-    Sparkles
+    Sparkles,
+    Users
 } from 'lucide-react';
 import './Navbar.css';
 
@@ -21,6 +22,7 @@ const Navbar = () => {
     const navLinks = [
         { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { path: '/tasks', label: 'Tasks', icon: CheckSquare },
+        { path: '/teams', label: 'Teams', icon: Users },
         { path: '/analytics', label: 'Analytics', icon: BarChart3 }
     ];
 

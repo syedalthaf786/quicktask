@@ -10,6 +10,8 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Tasks from './pages/Tasks';
 import Analytics from './pages/Analytics';
+import Teams from './pages/Teams';
+import TeamDetails from './pages/TeamDetails';
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -63,6 +65,22 @@ function App() {
                             element={
                                 <ProtectedRoute>
                                     <Analytics />
+                                </ProtectedRoute>
+                            }
+                        />
+                        <Route
+                            path="/teams"
+                            element={
+                                <ProtectedRoute>
+                                    <Teams />
+                                </ProtectedRoute>
+                            }
+                        />
+                        <Route
+                            path="/teams/:id"
+                            element={
+                                <ProtectedRoute>
+                                    <TeamDetails />
                                 </ProtectedRoute>
                             }
                         />

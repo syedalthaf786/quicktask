@@ -4,6 +4,41 @@ const { body, validationResult } = require('express-validator');
 const prisma = require('../lib/prisma');
 const { protect } = require('../middleware/auth');
 
+// Helper function to check team membership
+async function checkTeamMembership(teamId, userId) {
+    const membership = await prisma.teamMember.findUnique({
+        where: {
+            teamId_userId: {
+                teamId,
+                userId
+            }
+        }
+    });
+    return !!membership;
+}
+
+// Helper function to check if user has access to task
+async function checkTaskAccess(taskId, userId) {
+    const task = await prisma.task.findFirst({
+        where: {
+            id: taskId,
+            OR: [
+                { creatorId: userId },
+                { assigneeId: userId },
+                {
+                    teamId: { not: null },
+                    team: {
+                        members: {
+                            some: { userId }
+                        }
+                    }
+                }
+            ]
+        }
+    });
+    return task;
+}
+
 // All routes are protected
 router.use(protect);
 
@@ -13,10 +48,24 @@ router.use(protect);
 router.get('/', async (req, res) => {
     try {
         const { status, priority, search, sortBy, order } = req.query;
+        const userId = req.user.id;
+        
+        console.log(`Fetching tasks for user: ${userId}`);
 
-        // Build where clause
+        // Build where clause - show tasks created by user OR assigned to user OR team tasks
         const where = {
-            userId: req.user.id
+            OR: [
+                { creatorId: userId },
+                { assigneeId: userId },
+                {
+                    teamId: { not: null },
+                    team: {
+                        members: {
+                            some: { userId: userId }
+                        }
+                    }
+                }
+            ]
         };
 
         // Filter by status
@@ -51,6 +100,8 @@ router.get('/', async (req, res) => {
             orderBy
         });
 
+        console.log(`Found ${tasks.length} tasks for user ${userId}`);
+
         res.status(200).json({
             success: true,
             count: tasks.length,
@@ -72,11 +123,27 @@ router.get('/', async (req, res) => {
 router.get('/stats/summary', async (req, res) => {
     try {
         const userId = req.user.id;
+        console.log(`Fetching stats for user: ${userId}`);
 
-        // Get all tasks for aggregation
+        // Get all tasks for aggregation (created by user OR assigned to user OR member of team)
         const tasks = await prisma.task.findMany({
-            where: { userId }
+            where: {
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    {
+                        teamId: { not: null },
+                        team: {
+                            members: {
+                                some: { userId }
+                            }
+                        }
+                    }
+                ]
+            }
         });
+
+        console.log(`Found ${tasks.length} tasks for user ${userId}`);
 
         // Calculate statistics
         const total = tasks.length;
@@ -101,18 +168,22 @@ router.get('/stats/summary', async (req, res) => {
             t.status !== 'COMPLETED' && new Date(t.dueDate) < now
         ).length;
 
+        const stats = {
+            total,
+            completed,
+            pending,
+            inProgress,
+            todo,
+            overdue,
+            completionRate: parseFloat(completionRate),
+            priorityDistribution
+        };
+
+        console.log('Stats:', stats);
+
         res.status(200).json({
             success: true,
-            stats: {
-                total,
-                completed,
-                pending,
-                inProgress,
-                todo,
-                overdue,
-                completionRate: parseFloat(completionRate),
-                priorityDistribution
-            }
+            stats
         });
     } catch (error) {
         console.error('Get stats error:', error);
@@ -150,10 +221,21 @@ router.get('/analytics/productivity', async (req, res) => {
                 startDate = new Date(2000, 0, 1); // Very old date to get all tasks
         }
 
-        // Get completed tasks in period
+        // Get completed tasks in period (created by user OR assigned to user OR team member)
         const completedTasks = await prisma.task.findMany({
             where: {
-                userId,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    {
+                        teamId: { not: null },
+                        team: {
+                            members: {
+                                some: { userId }
+                            }
+                        }
+                    }
+                ],
                 status: 'COMPLETED',
                 completedAt: { gte: startDate }
             },
@@ -252,10 +334,45 @@ router.get('/analytics/productivity', async (req, res) => {
 // @access  Private
 router.get('/:id', async (req, res) => {
     try {
+        const taskId = parseInt(req.params.id);
+        const userId = req.user.id;
+
+        // Find task that user has access to (creator, assignee, or team member)
         const task = await prisma.task.findFirst({
             where: {
-                id: parseInt(req.params.id),
-                userId: req.user.id
+                id: taskId,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    {
+                        teamId: {
+                            not: null
+                        },
+                        team: {
+                            members: {
+                                some: {
+                                    userId: userId
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+            include: {
+                creator: {
+                    select: { id: true, name: true, email: true }
+                },
+                assignee: {
+                    select: { id: true, name: true, email: true }
+                },
+                comments: {
+                    include: {
+                        user: {
+                            select: { id: true, name: true, email: true }
+                        }
+                    },
+                    orderBy: { createdAt: 'desc' }
+                }
             }
         });
 
@@ -266,9 +383,20 @@ router.get('/:id', async (req, res) => {
             });
         }
 
+        // Check if user is team member (for permission purposes)
+        const isTeamMember = task.teamId ? await checkTeamMembership(task.teamId, userId) : false;
+        const isCreator = task.creatorId === userId;
+        const isAssignee = task.assigneeId === userId;
+
         res.status(200).json({
             success: true,
-            task
+            task,
+            permissions: {
+                canEdit: isCreator || isTeamMember,
+                canUpdateStatus: isCreator || isAssignee || isTeamMember,
+                canComment: isCreator || isAssignee || isTeamMember,
+                canDelete: isCreator
+            }
         });
     } catch (error) {
         console.error('Get task error:', error);
@@ -319,7 +447,9 @@ router.post('/', [
                 priority: priority ? priorityMap[priority] : 'MEDIUM',
                 status: status ? statusMap[status] : 'TODO',
                 dueDate: new Date(dueDate),
-                userId: req.user.id
+                creatorId: req.user.id,
+                assigneeId: req.body.assigneeId ? parseInt(req.body.assigneeId) : null,
+                teamId: req.body.teamId ? parseInt(req.body.teamId) : null
             }
         });
 
@@ -362,22 +492,39 @@ router.put('/:id', [
             });
         }
 
-        // Find task
+        const taskId = parseInt(req.params.id);
+        const userId = req.user.id;
+
+        // Find task that user has access to
         const existingTask = await prisma.task.findFirst({
             where: {
-                id: parseInt(req.params.id),
-                userId: req.user.id
+                id: taskId,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    {
+                        teamId: { not: null },
+                        team: {
+                            members: {
+                                some: { userId }
+                            }
+                        }
+                    }
+                ]
             }
         });
 
         if (!existingTask) {
             return res.status(404).json({
                 success: false,
-                message: 'Task not found'
+                message: 'Task not found or you do not have permission to update it'
             });
         }
 
-        const { title, description, priority, status, dueDate } = req.body;
+        const { title, description, priority, status, dueDate, assigneeId, teamId } = req.body;
+        const isCreator = existingTask.creatorId === userId;
+        const isAssignee = existingTask.assigneeId === userId;
+        const isTeamMember = existingTask.teamId ? await checkTeamMembership(existingTask.teamId, userId) : false;
 
         // Map frontend values to database enum values
         const priorityMap = { Low: 'LOW', Medium: 'MEDIUM', High: 'HIGH' };
@@ -385,12 +532,18 @@ router.put('/:id', [
 
         // Build update data
         const updateData = {};
-        if (title !== undefined) updateData.title = title;
-        if (description !== undefined) updateData.description = description;
-        if (priority !== undefined) updateData.priority = priorityMap[priority];
-        if (dueDate !== undefined) updateData.dueDate = new Date(dueDate);
 
-        // Handle status change
+        // Only creator can update title, description, priority, dueDate, assignee, team
+        if (isCreator) {
+            if (title !== undefined) updateData.title = title;
+            if (description !== undefined) updateData.description = description;
+            if (priority !== undefined) updateData.priority = priorityMap[priority];
+            if (dueDate !== undefined) updateData.dueDate = new Date(dueDate);
+            if (assigneeId !== undefined) updateData.assigneeId = assigneeId ? parseInt(assigneeId) : null;
+            if (teamId !== undefined) updateData.teamId = teamId ? parseInt(teamId) : null;
+        }
+
+        // Creator, assignee, and team members can update status
         if (status !== undefined) {
             updateData.status = statusMap[status];
             // Set completedAt if status is COMPLETED
@@ -403,7 +556,7 @@ router.put('/:id', [
 
         // Update task
         const task = await prisma.task.update({
-            where: { id: parseInt(req.params.id) },
+            where: { id: taskId },
             data: updateData
         });
 
@@ -431,7 +584,7 @@ router.delete('/:id', async (req, res) => {
         const task = await prisma.task.findFirst({
             where: {
                 id: parseInt(req.params.id),
-                userId: req.user.id
+                creatorId: req.user.id
             }
         });
 
@@ -453,6 +606,124 @@ router.delete('/:id', async (req, res) => {
         });
     } catch (error) {
         console.error('Delete task error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+});
+
+// @route   POST /api/tasks/:id/comments
+// @desc    Add comment to task
+// @access  Private
+router.post('/:id/comments', [
+    body('content').trim().notEmpty().withMessage('Comment content is required')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                errors: errors.array()
+            });
+        }
+
+        const taskId = parseInt(req.params.id);
+        const userId = req.user.id;
+        const { content } = req.body;
+
+        // Check if user has access to the task
+        const task = await prisma.task.findFirst({
+            where: {
+                id: taskId,
+                OR: [
+                    { creatorId: userId },
+                    { assigneeId: userId },
+                    {
+                        teamId: { not: null },
+                        team: {
+                            members: {
+                                some: { userId }
+                            }
+                        }
+                    }
+                ]
+            }
+        });
+
+        if (!task) {
+            return res.status(404).json({
+                success: false,
+                message: 'Task not found or you do not have permission to comment'
+            });
+        }
+
+        // Create comment
+        const comment = await prisma.comment.create({
+            data: {
+                content,
+                taskId,
+                userId
+            },
+            include: {
+                user: {
+                    select: { id: true, name: true, email: true }
+                }
+            }
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Comment added successfully',
+            comment
+        });
+    } catch (error) {
+        console.error('Add comment error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error',
+            error: error.message
+        });
+    }
+});
+
+// @route   DELETE /api/tasks/:taskId/comments/:commentId
+// @desc    Delete comment
+// @access  Private
+router.delete('/:taskId/comments/:commentId', async (req, res) => {
+    try {
+        const taskId = parseInt(req.params.taskId);
+        const commentId = parseInt(req.params.commentId);
+        const userId = req.user.id;
+
+        // Find comment
+        const comment = await prisma.comment.findFirst({
+            where: {
+                id: commentId,
+                taskId,
+                userId: userId
+            }
+        });
+
+        if (!comment) {
+            return res.status(404).json({
+                success: false,
+                message: 'Comment not found or you do not have permission to delete it'
+            });
+        }
+
+        // Delete comment
+        await prisma.comment.delete({
+            where: { id: commentId }
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'Comment deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete comment error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',

@@ -33,6 +33,18 @@
   --priority-medium: #f59e0b;
   --priority-high: #ef4444;
   
+  /* Aliases for component compatibility */
+  --card-bg: var(--bg-secondary);
+  --border-color: var(--bg-tertiary);
+  --text-muted: var(--text-secondary);
+  --text-color: var(--text-primary);
+  --primary-color: var(--primary);
+  --primary-color-light: var(--primary-light);
+  --secondary-color: var(--secondary);
+  --secondary-bg: var(--bg-tertiary);
+  --success-color: var(--success);
+  --danger-color: var(--danger);
+  
   /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
