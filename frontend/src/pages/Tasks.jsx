@@ -4,6 +4,8 @@ import { teamService } from '../services/teamService';
 import { useAuth } from '../context/AuthContext';
 import { exportUtils } from '../utils/exportUtils';
 import Navbar from '../components/Navbar';
+import SmartTaskCard from '../components/SmartTaskCard';
+import BugReportForm from '../components/BugReportForm';
 import { toast } from 'react-toastify';
 import {
     Plus,
@@ -59,6 +61,10 @@ const Tasks = () => {
     const [statusReason, setStatusReason] = useState('');
     const [pendingStatus, setPendingStatus] = useState('');
 
+    // Bug Report State
+    const [showBugForm, setShowBugForm] = useState(false);
+    const [selectedTaskForBug, setSelectedTaskForBug] = useState(null);
+
     const [isFirstRun, setIsFirstRun] = useState(true);
 
     useEffect(() => {
@@ -98,7 +104,7 @@ const Tasks = () => {
         try {
             setLoading(true);
             console.log('Fetching tasks with filters:', filters);
-            
+
             const data = await taskService.getTasks({
                 ...filters,
                 sortBy,
@@ -167,10 +173,10 @@ const Tasks = () => {
         try {
             // Update status first
             await taskService.updateTask(editingTask.id, { status: pendingStatus });
-            
+
             // Add comment with reason
             await taskService.addComment(editingTask.id, `Status changed to ${pendingStatus}. Reason: ${statusReason}`);
-            
+
             toast.success('Task updated with reason');
             setShowStatusModal(false);
             setStatusReason('');
@@ -202,7 +208,7 @@ const Tasks = () => {
                 setEditingTask(data.task);
                 setPermissions(data.permissions);
                 setComments(data.task.comments || []);
-                
+
                 setFormData({
                     title: data.task.title,
                     description: data.task.description || '',
@@ -396,6 +402,46 @@ const Tasks = () => {
                     <div className="tasks-grid">
                         {filteredTasks.map((task, index) => {
                             const dueDateStatus = getDueDateStatus(task.dueDate, task.status);
+
+                            // Check for Smart Task (Testing Assignment)
+                            const isSmartTask = task.description && task.description.trim().startsWith('{') && !task.title.startsWith('[BUG]');
+
+                            if (isSmartTask) {
+                                // Find related bugs for this task
+                                const relatedBugs = tasks.filter(t =>
+                                    t.title.startsWith('[BUG]') &&
+                                    t.description &&
+                                    t.description.includes(`Related Task ID:** ${task.id}`)
+                                );
+
+                                return (
+                                    <SmartTaskCard
+                                        key={task.id || task._id}
+                                        task={task}
+                                        onReportBug={(id, title) => {
+                                            setSelectedTaskForBug({ id, title });
+                                            setShowBugForm(true);
+                                        }}
+                                        relatedBugs={relatedBugs}
+                                        teamMembers={teamMembers}
+                                        currentUser={user}
+                                        onAssign={async (taskId, assigneeId) => {
+                                            if (user.email !== 'prudvireddy7733@gmail.com') return;
+                                            try {
+                                                await taskService.updateTask(taskId, { assigneeId });
+                                                setTasks(prev => prev.map(t =>
+                                                    t.id === taskId
+                                                        ? { ...t, assigneeId, assignee: teamMembers.find(m => m.user.id === assigneeId)?.user }
+                                                        : t
+                                                ));
+                                                toast.success('Assignee updated');
+                                            } catch (error) {
+                                                toast.error('Failed to assign task');
+                                            }
+                                        }}
+                                    />
+                                );
+                            }
 
                             return (
                                 <motion.div
@@ -771,6 +817,16 @@ const Tasks = () => {
                         </motion.div>
                     )}
                 </AnimatePresence>
+
+                {/* Bug Report Form */}
+                <BugReportForm
+                    isOpen={showBugForm} // Use dedicated state
+                    onClose={() => setShowBugForm(false)}
+                    teamId={selectedTaskForBug?.teamId || tasks[0]?.teamId} // Try to get from selected task
+                    onSuccess={fetchTasks}
+                    parentTaskId={selectedTaskForBug?.id}
+                    parentTaskTitle={selectedTaskForBug?.title}
+                />
             </div>
         </div>
     );

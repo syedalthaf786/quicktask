@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { taskService } from '../services/taskService';
 import Navbar from '../components/Navbar';
+import TestingDashboard from './TestingDashboard'; // Import the new dashboard
 import {
     CheckCircle2,
     Clock,
@@ -20,16 +21,20 @@ const Dashboard = () => {
     const [stats, setStats] = useState(null);
     const [recentTasks, setRecentTasks] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [isSchoolERPTeam, setIsSchoolERPTeam] = useState(false);
 
     useEffect(() => {
+        if (user?.email === 'prudvireddy7733@gmail.com') {
+            setIsSchoolERPTeam(true);
+        }
         fetchDashboardData();
-    }, []);
+    }, [user]);
 
     const fetchDashboardData = async () => {
         try {
             setLoading(true);
             console.log('Fetching dashboard data...');
-            
+
             const [statsData, tasksData] = await Promise.all([
                 taskService.getStats(),
                 taskService.getTasks({ sortBy: 'createdAt', order: 'desc' })
@@ -61,11 +66,15 @@ const Dashboard = () => {
             }
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
-            toast.error(error.message || 'Failed to load dashboard data');
+            // toast.error(error.message || 'Failed to load dashboard data');
         } finally {
             setLoading(false);
         }
     };
+
+    if (isSchoolERPTeam) {
+        return <TestingDashboard />;
+    }
 
     const statCards = stats ? [
         {
