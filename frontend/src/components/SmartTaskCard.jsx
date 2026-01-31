@@ -508,6 +508,3 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
         </>
     );
 };
-
-export default SmartTaskCard;
-

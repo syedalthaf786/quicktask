@@ -100,6 +100,19 @@ const Tasks = () => {
         }
     };
 
+    // Auto-fetch members for School ERP team to populate SmartTaskCard dropdowns
+    useEffect(() => {
+        if (teams.length > 0) {
+            const schoolErpTeam = teams.find(t => t.name === 'School ERP') || teams[0];
+            if (schoolErpTeam) {
+                // Only fetch if not already selecting a specific team
+                if (!selectedTeam) {
+                    fetchTeamMembers(schoolErpTeam.id);
+                }
+            }
+        }
+    }, [teams]);
+
     const fetchTasks = async () => {
         try {
             setLoading(true);
