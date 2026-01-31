@@ -30,11 +30,11 @@ const BugReportForm = ({ isOpen, onClose, teamId, onSuccess, parentTaskId, paren
 
     const mapSeverityToPriority = (severity) => {
         switch (severity) {
-            case 'Critical': return 'HIGH';
-            case 'High': return 'HIGH';
-            case 'Medium': return 'MEDIUM';
-            case 'Low': return 'LOW';
-            default: return 'MEDIUM';
+            case 'Critical': return 'High';
+            case 'High': return 'High';
+            case 'Medium': return 'Medium';
+            case 'Low': return 'Low';
+            default: return 'Medium';
         }
     };
 
@@ -66,7 +66,7 @@ ${formData.actualResult}
                 title: `[BUG] ${formData.title}`,
                 description: fullDescription,
                 priority: mapSeverityToPriority(formData.severity),
-                status: 'TODO',
+                status: 'Todo',
                 teamId: teamId,
                 dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000)
             };

@@ -142,7 +142,9 @@ const TestingDashboard = () => {
                             {assignments.map((task) => {
                                 // Find related bugs (naive search in description for now, or just implicit linking if we had relations)
                                 // Since we store simple "Related Task ID: X" in bug description, we can filter bugs
-                                const relatedBugs = bugs.filter(b => b.description.includes(`Related Task ID:** ${task.id}`));
+                                const relatedBugs = bugs.filter(b =>
+                                    b.description && b.description.includes(`Related Task ID:** ${task.id}`)
+                                );
 
                                 return (
                                     <SmartTaskCard

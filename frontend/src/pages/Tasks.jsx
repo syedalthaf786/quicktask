@@ -137,6 +137,9 @@ const Tasks = () => {
                 visibleTasks = data.tasks.filter(t => t.assigneeId === user?.id);
             }
 
+            // Filter out BUG tasks from the main list as they belong in the Testing Dashboard
+            visibleTasks = visibleTasks.filter(t => !t.title.startsWith('[BUG]'));
+
             setTasks(visibleTasks);
             setFilteredTasks(visibleTasks);
         } catch (error) {
@@ -436,8 +439,8 @@ const Tasks = () => {
                                     <SmartTaskCard
                                         key={task.id || task._id}
                                         task={task}
-                                        onReportBug={(id, title) => {
-                                            setSelectedTaskForBug({ id, title });
+                                        onReportBug={(id, title, teamId) => {
+                                            setSelectedTaskForBug({ id, title, teamId });
                                             setShowBugForm(true);
                                         }}
                                         relatedBugs={relatedBugs}

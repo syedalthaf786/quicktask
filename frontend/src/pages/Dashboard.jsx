@@ -33,40 +33,59 @@ const Dashboard = () => {
     const fetchDashboardData = async () => {
         try {
             setLoading(true);
-            console.log('Fetching dashboard data...');
 
             const [statsData, tasksData] = await Promise.all([
                 taskService.getStats(),
                 taskService.getTasks({ sortBy: 'createdAt', order: 'desc' })
             ]);
 
-            console.log('Stats response:', statsData);
-            console.log('Tasks response:', tasksData);
-
-            // Validate stats data
-            if (!statsData || !statsData.success) {
-                console.error('Stats API error:', statsData);
-                throw new Error(statsData?.message || 'Failed to fetch stats');
+            // Validate responses
+            if (!statsData || !statsData.success || !tasksData || !tasksData.success) {
+                throw new Error('Failed to fetch dashboard data');
             }
 
-            // Validate tasks data
-            if (!tasksData || !tasksData.success) {
-                console.error('Tasks API error:', tasksData);
-                throw new Error(tasksData?.message || 'Failed to fetch tasks');
+            const isOwner = user?.email?.toLowerCase().trim() === 'prudvireddy7733@gmail.com';
+
+            let visibleTasks = tasksData.tasks;
+            let displayStats = statsData.stats;
+
+            if (!isOwner) {
+                // Filter tasks for non-owners
+                visibleTasks = tasksData.tasks.filter(t => t.assigneeId === user?.id);
+
+                // Recalculate stats based on assigned tasks
+                const total = visibleTasks.length;
+                const completed = visibleTasks.filter(t => t.status === 'Completed').length;
+                const inProgress = visibleTasks.filter(t => t.status === 'In Progress').length;
+
+                // Calculate overdue
+                const now = new Date();
+                const overdue = visibleTasks.filter(t => {
+                    const dueDate = new Date(t.dueDate);
+                    return t.status !== 'Completed' && dueDate < now;
+                }).length;
+
+                displayStats = {
+                    total,
+                    completed,
+                    inProgress,
+                    overdue,
+                    pending: total - completed,
+                    completionRate: total === 0 ? 0 : Math.round((completed / total) * 100)
+                };
             }
 
-            setStats(statsData.stats);
-            setRecentTasks(tasksData.tasks.slice(0, 5));
+            setStats(displayStats);
+            setRecentTasks(visibleTasks.slice(0, 5));
 
             // Show alert for overdue tasks
-            if (statsData.stats && statsData.stats.overdue > 0) {
-                toast.warning(`You have ${statsData.stats.overdue} overdue task(s)!`, {
-                    toastId: 'overdue-alert' // Prevent duplicate toasts
+            if (displayStats.overdue > 0) {
+                toast.warning(`You have ${displayStats.overdue} overdue task(s)!`, {
+                    toastId: 'overdue-alert'
                 });
             }
         } catch (error) {
             console.error('Error fetching dashboard data:', error);
-            // toast.error(error.message || 'Failed to load dashboard data');
         } finally {
             setLoading(false);
         }

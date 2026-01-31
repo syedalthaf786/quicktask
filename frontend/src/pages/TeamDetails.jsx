@@ -51,47 +51,44 @@ const TeamDetails = () => {
     console.log('TeamDetails - Initial render, id:', id);
 
     useEffect(() => {
-        console.log('TeamDetails useEffect triggered, id:', id);
-        if (id) {
-            console.log('Calling fetchTeamData for team:', id);
+        if (id && user) {
             fetchTeamData();
-        } else {
-            console.warn('TeamDetails - id is undefined or null');
+        } else if (!id) {
             setLoading(false);
         }
-    }, [id, filters]);
+    }, [id, filters, user]);
 
     const fetchTeamData = async () => {
         try {
             setLoading(true);
-            console.log('Fetching team data for team:', id);
-            
+
             const [teamData, tasksData] = await Promise.all([
                 teamService.getTeam(id),
                 teamService.getTeamTasks(id, filters)
             ]);
 
-            console.log('Team data response:', teamData);
-            console.log('Tasks data response:', tasksData);
-
             // Validate responses
             if (!teamData || !teamData.success) {
-                console.error('Team API error:', teamData);
                 throw new Error(teamData?.message || 'Failed to fetch team');
             }
 
             if (!tasksData || !tasksData.success) {
-                console.error('Tasks API error:', tasksData);
                 throw new Error(tasksData?.message || 'Failed to fetch team tasks');
+            }
+
+            // Apply Visibility Filtering
+            const isOwner = user?.email?.toLowerCase().trim() === 'prudvireddy7733@gmail.com';
+
+            let visibleTasks = tasksData.tasks;
+            if (!isOwner) {
+                // Non-owners only see tasks assigned to them
+                visibleTasks = tasksData.tasks.filter(t => t.assigneeId === user?.id);
             }
 
             // Set team and tasks
             setTeam(teamData.team);
-            setTasks(tasksData.tasks);
-            
-            console.log('Team set to:', teamData.team);
-            console.log('Number of tasks set:', tasksData.tasks.length);
-            console.log('Team members count:', teamData.team?.members?.length);
+            setTasks(visibleTasks);
+
         } catch (error) {
             console.error('Error fetching team data:', error);
             toast.error(error.message || 'Failed to load team data');
@@ -153,10 +150,10 @@ const TeamDetails = () => {
         try {
             // Update status first
             await taskService.updateTask(editingTask.id, { status: pendingStatus });
-            
+
             // Add comment with reason
             await taskService.addComment(editingTask.id, `Status changed to ${pendingStatus}. Reason: ${statusReason}`);
-            
+
             toast.success('Task updated with reason');
             setShowStatusModal(false);
             setStatusReason('');
@@ -252,7 +249,7 @@ const TeamDetails = () => {
                         <ArrowLeft size={20} />
                         Back to Teams
                     </Link>
-                    
+
                     <div className="team-header-info">
                         <div>
                             <h1 className="page-title">{team.name}</h1>
@@ -295,13 +292,13 @@ const TeamDetails = () => {
                 </div>
 
                 <div className="team-tabs">
-                    <button 
+                    <button
                         className={`tab ${activeTab === 'tasks' ? 'active' : ''}`}
                         onClick={() => setActiveTab('tasks')}
                     >
                         Tasks
                     </button>
-                    <button 
+                    <button
                         className={`tab ${activeTab === 'members' ? 'active' : ''}`}
                         onClick={() => setActiveTab('members')}
                     >
@@ -348,7 +345,7 @@ const TeamDetails = () => {
                             <div className="tasks-grid">
                                 {tasks.map((task, index) => {
                                     const dueDateStatus = getDueDateStatus(task.dueDate, task.status);
-                                    
+
                                     return (
                                         <motion.div
                                             key={task.id}
@@ -385,14 +382,14 @@ const TeamDetails = () => {
                                             {/* Status Change Actions for Team Members */}
                                             {task.status === 'COMPLETED' && (
                                                 <div className="task-actions" style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                                                    <button 
+                                                    <button
                                                         className="btn btn-sm"
                                                         onClick={() => handleTaskStatusChange(task, 'In Progress')}
                                                         title="Mark as In Progress"
                                                     >
                                                         <Clock size={14} /> In Progress
                                                     </button>
-                                                    <button 
+                                                    <button
                                                         className="btn btn-sm"
                                                         onClick={() => handleTaskStatusChange(task, 'Todo')}
                                                         title="Mark as Todo"
@@ -441,7 +438,7 @@ const TeamDetails = () => {
                                     <div className="member-actions">
                                         {getRoleBadge(member.role)}
                                         {member.role !== 'OWNER' && team.ownerId === user?.id && (
-                                            <button 
+                                            <button
                                                 className="btn-icon danger"
                                                 onClick={() => handleRemoveMember(member.userId)}
                                                 title="Remove Member"

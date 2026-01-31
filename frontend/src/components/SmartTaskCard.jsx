@@ -12,7 +12,8 @@ import {
     Copy,
     Check,
     Info,
-    AlertTriangle
+    AlertTriangle,
+    ChevronLeft
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 
@@ -23,6 +24,24 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
     const [activeModule, setActiveModule] = useState(0);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
     const [showCredentials, setShowCredentials] = useState(false); // Collapsed by default
+    const [selectedBug, setSelectedBug] = useState(null);
+
+    const parseBugDescription = (desc) => {
+        if (!desc) return {};
+        const extract = (header) => {
+            const regex = new RegExp(`\\*\\*${header}:\\*\\*\\s*([\\s\\S]*?)(?=\\n\\*\\*|$)`, 'i');
+            const match = desc.match(regex);
+            return match ? match[1].trim() : '';
+        };
+        return {
+            severity: extract('Severity'),
+            browser: extract('Browser'),
+            description: extract('Description'),
+            steps: extract('Steps to Reproduce'),
+            expected: extract('Expected Result'),
+            actual: extract('Actual Result')
+        };
+    };
 
     useEffect(() => {
         const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -318,7 +337,7 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
 
                                     <button
                                         className="btn btn-danger"
-                                        onClick={() => onReportBug(task.id, task.title)}
+                                        onClick={() => onReportBug(task.id, task.title, task.teamId)}
                                         style={{ display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}
                                     >
                                         <Bug size={18} /> Report Bug
@@ -423,14 +442,48 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
                                             <h4 style={{ color: '#b91c1c', margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <AlertCircle size={18} /> Known Issues ({relatedBugs.length})
                                             </h4>
-                                            <ul style={{ margin: 0, paddingLeft: '1.5rem', color: '#991b1b', fontSize: '0.9rem' }}>
-                                                {relatedBugs.map(bug => (
-                                                    <li key={bug.id} style={{ marginBottom: '4px' }}>
-                                                        <span style={{ fontWeight: 500 }}>{bug.title.replace('[BUG]', '').replace(task.title, '').trim()}</span>
-                                                        <span className="badge badge-sm" style={{ marginLeft: '8px', fontSize: '0.7rem' }}>{bug.status}</span>
-                                                    </li>
-                                                ))}
-                                            </ul>
+
+                                            {Object.entries(relatedBugs.reduce((acc, bug) => {
+                                                const name = bug.creator?.name || 'Unknown Reporter';
+                                                if (!acc[name]) acc[name] = [];
+                                                acc[name].push(bug);
+                                                return acc;
+                                            }, {})).map(([reporterName, bugs]) => (
+                                                <div key={reporterName} style={{ marginBottom: '1rem' }}>
+                                                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#64748b', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <div style={{ width: '18px', height: '18px', background: '#cbd5e1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: 'white' }}>
+                                                            {reporterName.charAt(0).toUpperCase()}
+                                                        </div>
+                                                        {reporterName}
+                                                    </div>
+                                                    <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+                                                        {bugs.map(bug => (
+                                                            <li key={bug.id} style={{ marginBottom: '8px' }}>
+                                                                <button
+                                                                    onClick={() => setSelectedBug(bug)}
+                                                                    style={{
+                                                                        width: '100%', textAlign: 'left',
+                                                                        background: 'white', border: '1px solid #fecaca',
+                                                                        padding: '10px 14px', borderRadius: '8px',
+                                                                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                                                        cursor: 'pointer', transition: 'all 0.2s',
+                                                                        color: '#991b1b', fontSize: '0.9rem',
+                                                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                                                                    }}
+                                                                    onMouseEnter={(e) => e.currentTarget.style.background = '#fff5f5'}
+                                                                    onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                                                                >
+                                                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                                                        <span style={{ fontWeight: 600 }}>{bug.title.replace('[BUG]', '').replace(task.title, '').trim() || bug.title}</span>
+                                                                        <span style={{ fontSize: '0.75rem', color: '#b91c1c', opacity: 0.8 }}>Click to view details</span>
+                                                                    </div>
+                                                                    <span className="badge badge-sm" style={{ background: '#fecaca', color: '#991b1b', border: 'none' }}>{bug.status}</span>
+                                                                </button>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            ))}
                                         </div>
                                     )}
 
@@ -504,6 +557,162 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
                                         </motion.div>
                                     )}
                                 </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Bug Details Modal */}
+            <AnimatePresence>
+                {selectedBug && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        style={{
+                            position: 'fixed',
+                            top: 0, left: 0, right: 0, bottom: 0,
+                            background: 'rgba(0,0,0,0.7)',
+                            backdropFilter: 'blur(5px)',
+                            zIndex: 1200,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '20px'
+                        }}
+                        onClick={(e) => {
+                            if (e.target === e.currentTarget) setSelectedBug(null);
+                        }}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.95, opacity: 0 }}
+                            style={{
+                                width: '100%', maxWidth: '700px',
+                                maxHeight: '90vh', overflowY: 'auto',
+                                background: 'white', borderRadius: '16px',
+                                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+                                display: 'flex', flexDirection: 'column'
+                            }}
+                        >
+                            <div style={{ padding: '1.5rem', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ width: '32px', height: '32px', background: '#fee2e2', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}>
+                                        <Bug size={18} />
+                                    </div>
+                                    <div>
+                                        <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#1e293b' }}>Bug Details</h2>
+                                        <div style={{ fontSize: '0.85rem', color: '#64748b' }}>{selectedBug.title.replace('[BUG]', '').trim()}</div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {relatedBugs.length > 1 && (
+                                        <div style={{ display: 'flex', background: 'white', borderRadius: '8px', border: '1px solid #e2e8f0', marginRight: '1rem' }}>
+                                            <button
+                                                disabled={relatedBugs.findIndex(b => b.id === selectedBug.id) === 0}
+                                                onClick={() => {
+                                                    const idx = relatedBugs.findIndex(b => b.id === selectedBug.id);
+                                                    if (idx > 0) setSelectedBug(relatedBugs[idx - 1]);
+                                                }}
+                                                style={{ padding: '6px', border: 'none', background: 'transparent', cursor: 'pointer', opacity: relatedBugs.findIndex(b => b.id === selectedBug.id) === 0 ? 0.3 : 1 }}
+                                            >
+                                                <ChevronLeft size={20} />
+                                            </button>
+                                            <div style={{ width: '1px', background: '#e2e8f0' }}></div>
+                                            <button
+                                                disabled={relatedBugs.findIndex(b => b.id === selectedBug.id) === relatedBugs.length - 1}
+                                                onClick={() => {
+                                                    const idx = relatedBugs.findIndex(b => b.id === selectedBug.id);
+                                                    if (idx < relatedBugs.length - 1) setSelectedBug(relatedBugs[idx + 1]);
+                                                }}
+                                                style={{ padding: '6px', border: 'none', background: 'transparent', cursor: 'pointer', opacity: relatedBugs.findIndex(b => b.id === selectedBug.id) === relatedBugs.length - 1 ? 0.3 : 1 }}
+                                            >
+                                                <ChevronRight size={20} />
+                                            </button>
+                                        </div>
+                                    )}
+                                    <button onClick={() => setSelectedBug(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px', borderRadius: '50%' }} className="hover-bg-gray">
+                                        <ChevronDown size={20} style={{ transform: 'rotate(180deg)' }} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div style={{ padding: '2rem' }}>
+                                {(() => {
+                                    const details = parseBugDescription(selectedBug.description);
+                                    return (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                                <div>
+                                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Severity</label>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <span style={{
+                                                            padding: '4px 10px', borderRadius: '20px', fontSize: '0.85rem', fontWeight: 600,
+                                                            background: details.severity === 'Critical' ? '#fee2e2' : details.severity === 'High' ? '#ffedd5' : '#e0f2fe',
+                                                            color: details.severity === 'Critical' ? '#b91c1c' : details.severity === 'High' ? '#c2410c' : '#0369a1'
+                                                        }}>
+                                                            {details.severity || 'Medium'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Environment</label>
+                                                    <div style={{ fontSize: '0.95rem', fontWeight: 500, color: '#334155' }}>{details.browser || 'Unknown'}</div>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>
+                                                    <FileText size={16} /> Description
+                                                </label>
+                                                <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.95rem', lineHeight: '1.6', color: '#334155', whiteSpace: 'pre-wrap' }}>
+                                                    {details.description || 'No description provided.'}
+                                                </div>
+                                            </div>
+
+                                            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '1.5rem' }}>
+                                                <div style={{ marginBottom: '1.5rem' }}>
+                                                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>Steps to Reproduce</label>
+                                                    <div style={{ fontSize: '0.95rem', lineHeight: '1.6', color: '#334155', whiteSpace: 'pre-wrap' }}>{details.steps || 'N/A'}</div>
+                                                </div>
+
+                                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '1rem' }}>
+                                                    <div style={{ background: '#ecfdf5', padding: '12px', borderRadius: '8px', border: '1px solid #a7f3d0' }}>
+                                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 700, color: '#047857', marginBottom: '4px' }}>
+                                                            <Check size={14} /> Expected
+                                                        </label>
+                                                        <div style={{ fontSize: '0.9rem', color: '#064e3b' }}>{details.expected || 'N/A'}</div>
+                                                    </div>
+                                                    <div style={{ background: '#fef2f2', padding: '12px', borderRadius: '8px', border: '1px solid #fecaca' }}>
+                                                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', fontWeight: 700, color: '#b91c1c', marginBottom: '4px' }}>
+                                                            <AlertCircle size={14} /> Actual
+                                                        </label>
+                                                        <div style={{ fontSize: '0.9rem', color: '#7f1d1d' }}>{details.actual || 'N/A'}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+
+                            <div style={{ padding: '1.5rem', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: '12px', background: '#f8fafc' }}>
+                                <button
+                                    onClick={() => setSelectedBug(null)}
+                                    style={{ padding: '10px 24px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'white', fontWeight: 600, cursor: 'pointer', color: '#475569' }}
+                                >
+                                    Close
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        window.open(`/tasks`, '_blank');
+                                    }}
+                                    style={{ padding: '10px 24px', borderRadius: '8px', border: 'none', background: '#2563eb', color: 'white', fontWeight: 600, cursor: 'pointer' }}
+                                >
+                                    Open in Tasks
+                                </button>
                             </div>
                         </motion.div>
                     </motion.div>
