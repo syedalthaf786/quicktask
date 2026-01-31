@@ -118,12 +118,6 @@ const Login = () => {
                         </Link>
                     </p>
                 </div>
-
-                <div className="auth-demo-notice">
-                    <p><strong>Demo Credentials:</strong></p>
-                    <p>Email: demo@quicktask.com</p>
-                    <p>Password: password123</p>
-                </div>
             </motion.div>
         </div>
     );
