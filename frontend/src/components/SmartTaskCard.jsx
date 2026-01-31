@@ -111,7 +111,7 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
         );
     }
 
-    const isOwner = currentUser?.email === 'prudvireddy7733@gmail.com';
+    const isOwner = currentUser?.email?.toLowerCase().trim() === 'prudvireddy7733@gmail.com';
 
     return (
         <>
@@ -257,11 +257,15 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
                                                 style={{ border: 'none', background: 'transparent', fontWeight: 600, fontSize: '0.9rem', outline: 'none', cursor: 'pointer', maxWidth: '150px' }}
                                             >
                                                 <option value="">Unassigned</option>
-                                                {teamMembers.map(member => (
-                                                    <option key={member.user.id} value={member.user.id}>
-                                                        {member.user.name}
-                                                    </option>
-                                                ))}
+                                                {teamMembers.length > 0 ? (
+                                                    teamMembers.map(member => (
+                                                        <option key={member.user.id} value={member.user.id}>
+                                                            {member.user.name}
+                                                        </option>
+                                                    ))
+                                                ) : (
+                                                    <option disabled value="">No team members loaded</option>
+                                                )}
                                             </select>
                                         </div>
                                     ) : (
@@ -508,3 +512,5 @@ const SmartTaskCard = ({ task, onReportBug, relatedBugs = [], teamMembers = [], 
         </>
     );
 };
+
+export default SmartTaskCard;

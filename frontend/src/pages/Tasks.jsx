@@ -68,12 +68,11 @@ const Tasks = () => {
     const [isFirstRun, setIsFirstRun] = useState(true);
 
     useEffect(() => {
-        if (isFirstRun) {
+        if (user) {
             fetchTasks();
             fetchTeams();
-            setIsFirstRun(false);
         }
-    }, [filters, sortBy, order]);
+    }, [filters, sortBy, order, user]);
 
     useEffect(() => {
         if (selectedTeam) {
@@ -111,12 +110,11 @@ const Tasks = () => {
                 }
             }
         }
-    }, [teams]);
+    }, [teams, selectedTeam]);
 
     const fetchTasks = async () => {
         try {
             setLoading(true);
-            console.log('Fetching tasks with filters:', filters);
 
             const data = await taskService.getTasks({
                 ...filters,
@@ -124,16 +122,23 @@ const Tasks = () => {
                 order
             });
 
-            console.log('Tasks response:', data);
-
             // Validate response
             if (!data || !data.success) {
                 console.error('Tasks API error:', data);
                 throw new Error(data?.message || 'Failed to fetch tasks');
             }
 
-            setTasks(data.tasks);
-            setFilteredTasks(data.tasks);
+            // Apply Visibility Filtering
+            const isOwner = user?.email?.toLowerCase().trim() === 'prudvireddy7733@gmail.com';
+
+            let visibleTasks = data.tasks;
+            if (!isOwner) {
+                // Non-owners only see tasks assigned to them
+                visibleTasks = data.tasks.filter(t => t.assigneeId === user?.id);
+            }
+
+            setTasks(visibleTasks);
+            setFilteredTasks(visibleTasks);
         } catch (error) {
             console.error('Error fetching tasks:', error);
             toast.error(error.message || 'Failed to fetch tasks');
@@ -439,16 +444,23 @@ const Tasks = () => {
                                         teamMembers={teamMembers}
                                         currentUser={user}
                                         onAssign={async (taskId, assigneeId) => {
-                                            if (user.email !== 'prudvireddy7733@gmail.com') return;
+                                            const isOwner = user?.email?.toLowerCase().trim() === 'prudvireddy7733@gmail.com';
+                                            if (!isOwner) return;
                                             try {
                                                 await taskService.updateTask(taskId, { assigneeId });
-                                                setTasks(prev => prev.map(t =>
+
+                                                const updateList = (list) => list.map(t =>
                                                     t.id === taskId
                                                         ? { ...t, assigneeId, assignee: teamMembers.find(m => m.user.id === assigneeId)?.user }
                                                         : t
-                                                ));
+                                                );
+
+                                                setTasks(prev => updateList(prev));
+                                                setFilteredTasks(prev => updateList(prev));
+
                                                 toast.success('Assignee updated');
                                             } catch (error) {
+                                                console.error(error);
                                                 toast.error('Failed to assign task');
                                             }
                                         }}
