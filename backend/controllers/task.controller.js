@@ -274,7 +274,10 @@ exports.createTask = async (req, res) => {
         res.status(201).json({ success: true, message: `Task created as ${finalCategory}`, task });
     } catch (error) {
         console.error('Create task error:', error);
-        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+        console.error('Error name:', error.name);
+        console.error('Error code:', error.code);
+        console.error('Error meta:', error.meta);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message, errorCode: error.code });
     }
 };
 
