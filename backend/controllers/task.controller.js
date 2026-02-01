@@ -187,6 +187,21 @@ exports.createTask = async (req, res) => {
 
         const { title, description, priority, status, dueDate, category, assigneeId, teamId, estimatedHours } = req.body;
 
+        // Validate required fields
+        if (!title || title.trim() === '') {
+            return res.status(400).json({ success: false, message: 'Title is required' });
+        }
+        
+        if (!dueDate) {
+            return res.status(400).json({ success: false, message: 'Due date is required' });
+        }
+        
+        // Parse dueDate safely
+        const parsedDueDate = new Date(dueDate);
+        if (isNaN(parsedDueDate.getTime())) {
+            return res.status(400).json({ success: false, message: 'Invalid due date format' });
+        }
+
         // Auto-categorization
         const titleLower = title.toLowerCase();
         const descLower = (description || '').toLowerCase();
@@ -208,7 +223,7 @@ exports.createTask = async (req, res) => {
             status: status ? status.toUpperCase().replace(' ', '_') : 'TODO',
             category: finalCategory,
             isBugReport: isBugReport, // Use the flag
-            dueDate: new Date(dueDate),
+            dueDate: parsedDueDate,
             estimatedHours: estimatedHours ? parseFloat(estimatedHours) : null,
             creatorId: req.user.id,
             assigneeId: assigneeId || null,
@@ -224,7 +239,7 @@ exports.createTask = async (req, res) => {
                     priority: st.priority || 'MEDIUM',
                     status: st.status || 'TODO',
                     assigneeId: st.assigneeId || null,
-                    dueDate: st.dueDate ? new Date(st.dueDate) : (dueDate ? new Date(dueDate) : null)
+                    dueDate: st.dueDate ? (new Date(st.dueDate) || null) : (dueDate ? parsedDueDate : null)
                 }))
             };
         }
@@ -276,7 +291,19 @@ exports.createTask = async (req, res) => {
         console.error('Create task error:', error);
         console.error('Error name:', error.name);
         console.error('Error code:', error.code);
-        console.error('Error meta:', error.meta);
+        console.error('Error meta:', JSON.stringify(error.meta || {}));
+        
+        // Handle specific Prisma errors
+        if (error.code === 'P2002') {
+            return res.status(400).json({ success: false, message: 'A task with this title already exists' });
+        }
+        if (error.code === 'P2003') {
+            return res.status(400).json({ success: false, message: 'Invalid reference to related data (user or team not found)' });
+        }
+        if (error.code === 'P2025') {
+            return res.status(400).json({ success: false, message: 'Record not found - may be deleted or not yet created' });
+        }
+        
         res.status(500).json({ success: false, message: 'Server error', error: error.message, errorCode: error.code });
     }
 };
