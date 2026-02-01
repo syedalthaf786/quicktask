@@ -243,18 +243,9 @@ exports.createTask = async (req, res) => {
             };
         }
 
-        // Parse bug metadata if description contains it (legacy support, or if frontend sends plain text)
-        // But better if frontend sends `bugMetadata` object directly
-        if (req.body.bugMetadata) {
-            taskData.bugMetadata = req.body.bugMetadata;
-        } else if (isBugReport && description) {
-            // Basic parsing backup
-            taskData.bugMetadata = {
-                severity: 'MEDIUM',
-                environment: 'STAGING'
-            };
-        }
-
+        // Note: bugMetadata and isBugReport fields are not in the Prisma schema
+        // Bug reports should be created as separate BugReport records linked to tasks
+        
         const task = await prisma.$transaction(async (tx) => {
             const createdTask = await tx.task.create({
                 data: taskData,
@@ -323,7 +314,7 @@ exports.updateTask = async (req, res) => {
         const isCreator = existingTask.creatorId === userId;
 
         const updateData = {};
-        const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'assigneeId', 'teamId', 'estimatedHours', 'actualHours', 'bugMetadata'];
+        const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'assigneeId', 'teamId', 'estimatedHours', 'actualHours'];
 
         // Logic for permissions (simplified)
         if (isOwner || isCreator) {
@@ -331,10 +322,9 @@ exports.updateTask = async (req, res) => {
                 if (req.body[field] !== undefined) updateData[field] = req.body[field];
             });
         } else {
-            // Assignees can update status, actualHours, bugMetadata
+            // Assignees can update status and actualHours
             if (req.body.status) updateData.status = req.body.status.toUpperCase().replace(' ', '_');
             if (req.body.actualHours) updateData.actualHours = parseFloat(req.body.actualHours);
-            if (req.body.bugMetadata) updateData.bugMetadata = req.body.bugMetadata;
         }
 
         if (updateData.status === 'COMPLETED') updateData.completedAt = new Date();

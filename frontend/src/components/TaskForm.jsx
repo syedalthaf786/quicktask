@@ -26,14 +26,6 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
         campaignType: 'SOCIAL', platform: '',
         riskLevel: 'LOW', devOpsEnv: 'STAGING',
         designType: 'UI', figmaLink: '',
-        // bug meta
-        bugMetadata: {
-            severity: 'MEDIUM',
-            environment: 'STAGING',
-            steps: '',
-            expected: '',
-            actual: ''
-        },
         // subtasks
         subTasks: [],
         ...initialData // Apply initial data (e.g. teamId)
@@ -59,8 +51,6 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                 ...task.marketingData,
                 ...task.devOpsData,
                 ...task.designData,
-                // Bug data
-                bugMetadata: task.bugMetadata || formData.bugMetadata,
                 subTasks: task.subTasks || []
             });
             setStep('form');
