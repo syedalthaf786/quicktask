@@ -43,41 +43,38 @@ const BugReportForm = ({ isOpen, onClose, teamId, onSuccess, parentTaskId, paren
         setLoading(true);
 
         try {
-            const fullDescription = `
-**BUG REPORT**
-**Severity:** ${formData.severity}
-**Browser:** ${formData.browser}
-${parentTaskId ? `**Related Task ID:** ${parentTaskId}` : ''}
+            // Validate required fields
+            if (!formData.title.trim()) {
+                toast.error('Please enter a bug title');
+                setLoading(false);
+                return;
+            }
 
-**Description:**
-${formData.description}
+            if (!parentTaskId) {
+                toast.error('Parent task ID is required');
+                setLoading(false);
+                return;
+            }
 
-**Steps to Reproduce:**
-${formData.stepsToReproduce}
-
-**Expected Result:**
-${formData.expectedResult}
-
-**Actual Result:**
-${formData.actualResult}
-            `.trim();
-
-            const taskData = {
-                title: `[BUG] ${formData.title}`,
-                description: fullDescription,
-                priority: mapSeverityToPriority(formData.severity),
-                status: 'Todo',
-                teamId: teamId,
-                dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000)
+            const bugData = {
+                taskId: parentTaskId,
+                title: formData.title,
+                description: formData.description,
+                severity: formData.severity.toUpperCase(),
+                environment: 'STAGING', // Default environment
+                steps: formData.stepsToReproduce,
+                expected: formData.expectedResult,
+                actual: formData.actualResult,
+                priority: mapSeverityToPriority(formData.severity).toUpperCase()
             };
 
-            await taskService.createTask(taskData);
+            await taskService.createBugReport(bugData);
             toast.success('Bug reported successfully!');
             onSuccess && onSuccess();
             onClose();
             // Reset form
             setFormData({
-                title: '',
+                title: parentTaskTitle ? `Issue in ${parentTaskTitle}: ` : '',
                 description: '',
                 stepsToReproduce: '',
                 expectedResult: '',

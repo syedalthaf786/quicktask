@@ -118,33 +118,49 @@ router.get('/', async (req, res) => {
 // @access  Private
 router.get('/:id', async (req, res) => {
     try {
-        const teamId = parseInt(req.params.id);
+        const teamId = req.params.id;
         const userId = req.user.id;
-        
-        console.log(`Fetching team ${teamId} for user: ${userId}`);
-
-        const team = await prisma.team.findFirst({
+        // Find membership first to check role
+        const membership = await prisma.teamMember.findUnique({
             where: {
-                id: teamId,
-                members: {
-                    some: {
-                        userId: req.user.id
-                    }
-                }
-            },
+                teamId_userId: { teamId, userId }
+            }
+        });
+
+        if (!membership) {
+            return res.status(404).json({
+                success: false,
+                message: 'Team not found or access denied'
+            });
+        }
+
+        const isAdminOrOwner = membership.role === 'OWNER' || membership.role === 'ADMIN';
+
+        const team = await prisma.team.findUnique({
+            where: { id: teamId },
             include: {
-                owner: {
-                    select: { id: true, name: true, email: true }
-                },
+                owner: { select: { id: true, name: true, email: true } },
                 members: {
                     include: {
-                        user: {
-                            select: { id: true, name: true, email: true }
-                        }
+                        user: { select: { id: true, name: true, email: true } }
                     }
                 },
                 tasks: {
-                    orderBy: { createdAt: 'desc' }
+                    where: isAdminOrOwner ? {} : {
+                        OR: [
+                            { creatorId: userId },
+                            { assigneeId: userId },
+                            {
+                                title: { startsWith: '[BUG]' },
+                                description: { contains: 'Related Task ID:**' }
+                            }
+                        ]
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    include: {
+                        creator: { select: { id: true, name: true, email: true } },
+                        assignee: { select: { id: true, name: true, email: true } }
+                    }
                 },
                 _count: {
                     select: { tasks: true, members: true }
@@ -153,14 +169,28 @@ router.get('/:id', async (req, res) => {
         });
 
         if (!team) {
-            console.log(`Team ${teamId} not found or user ${userId} is not a member`);
             return res.status(404).json({
                 success: false,
                 message: 'Team not found'
             });
         }
 
-        console.log(`Team ${teamId} found with ${team.members?.length || 0} members and ${team.tasks?.length || 0} tasks`);
+        // Post-filter bugs for non-admins if needed (though 'where' covers most)
+        if (!isAdminOrOwner) {
+            const filteredTasks = await Promise.all(team.tasks.map(async (task) => {
+                if (task.creatorId === userId || task.assigneeId === userId) return task;
+                if (task.title.startsWith('[BUG]')) {
+                    const parentMatch = task.description?.match(/Related Task ID:\*\* (\d+)/);
+                    if (parentMatch) {
+                        const parentTaskId = parseInt(parentMatch[1]);
+                        const parentTask = await prisma.task.findUnique({ where: { id: parentTaskId } });
+                        if (parentTask && parentTask.assigneeId === userId) return task;
+                    }
+                }
+                return null;
+            }));
+            team.tasks = filteredTasks.filter(t => t !== null);
+        }
 
         res.status(200).json({
             success: true,
@@ -189,7 +219,7 @@ router.put('/:id', [
         // Find team and check ownership
         const existingTeam = await prisma.team.findFirst({
             where: {
-                id: parseInt(req.params.id),
+                id: req.params.id,
                 ownerId: req.user.id
             }
         });
@@ -204,7 +234,7 @@ router.put('/:id', [
         const { name, description } = req.body;
 
         const team = await prisma.team.update({
-            where: { id: parseInt(req.params.id) },
+            where: { id: req.params.id },
             data: {
                 name: name || existingTeam.name,
                 description: description !== undefined ? description : existingTeam.description
@@ -243,7 +273,7 @@ router.delete('/:id', async (req, res) => {
         // Find team and check ownership
         const team = await prisma.team.findFirst({
             where: {
-                id: parseInt(req.params.id),
+                id: req.params.id,
                 ownerId: req.user.id
             }
         });
@@ -283,7 +313,7 @@ router.post('/:id/members', [
 ], async (req, res) => {
     try {
         const { email, role } = req.body;
-        const teamId = parseInt(req.params.id);
+        const teamId = req.params.id;
 
         // Check if user is admin or owner
         const membership = await prisma.teamMember.findFirst({
@@ -364,8 +394,8 @@ router.post('/:id/members', [
 // @access  Private (Admin/Owner only, or self)
 router.delete('/:id/members/:userId', async (req, res) => {
     try {
-        const teamId = parseInt(req.params.id);
-        const targetUserId = parseInt(req.params.userId);
+        const teamId = req.params.id;
+        const targetUserId = req.params.userId;
         const currentUserId = req.user.id;
 
         // Check if removing self or is admin/owner
@@ -427,8 +457,8 @@ router.put('/:id/members/:userId', [
     body('role').isIn(['ADMIN', 'MEMBER']).withMessage('Role must be ADMIN or MEMBER')
 ], async (req, res) => {
     try {
-        const teamId = parseInt(req.params.id);
-        const targetUserId = parseInt(req.params.userId);
+        const teamId = req.params.id;
+        const targetUserId = req.params.userId;
         const { role } = req.body;
 
         // Check if current user is owner
@@ -487,10 +517,10 @@ router.put('/:id/members/:userId', [
 // @access  Private (Team members only)
 router.get('/:id/tasks', async (req, res) => {
     try {
-        const teamId = parseInt(req.params.id);
+        const teamId = req.params.id;
         const { status, priority, sortBy, order } = req.query;
         const userId = req.user.id;
-        
+
         console.log(`Fetching team ${teamId} tasks for user: ${userId}`);
 
         // Check if user is team member
@@ -566,7 +596,7 @@ router.get('/:id/tasks', async (req, res) => {
 // @access  Private (Team members only)
 router.get('/:id/members', async (req, res) => {
     try {
-        const teamId = parseInt(req.params.id);
+        const teamId = req.params.id;
 
         // Check if user is team member
         const membership = await prisma.teamMember.findUnique({

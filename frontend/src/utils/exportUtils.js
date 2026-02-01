@@ -55,12 +55,13 @@ export const exportUtils = {
             task.title,
             task.priority,
             task.status,
+            task.assignee ? task.assignee.name : 'Unassigned',
             format(new Date(task.dueDate), 'MMM dd, yyyy'),
             task.description?.substring(0, 50) || '-'
         ]);
 
         doc.autoTable({
-            head: [['Title', 'Priority', 'Status', 'Due Date', 'Description']],
+            head: [['Title', 'Priority', 'Status', 'Assigned To', 'Due Date', 'Description']],
             body: tableData,
             startY: 52,
             theme: 'grid',
@@ -74,11 +75,12 @@ export const exportUtils = {
                 cellPadding: 3
             },
             columnStyles: {
-                0: { cellWidth: 50 },
-                1: { cellWidth: 25 },
-                2: { cellWidth: 30 },
-                3: { cellWidth: 30 },
-                4: { cellWidth: 50 }
+                0: { cellWidth: 45 },
+                1: { cellWidth: 20 },
+                2: { cellWidth: 25 },
+                3: { cellWidth: 35 },
+                4: { cellWidth: 30 },
+                5: { cellWidth: 35 }
             }
         });
 

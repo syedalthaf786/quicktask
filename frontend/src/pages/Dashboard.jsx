@@ -1,16 +1,17 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { taskService } from '../services/taskService';
 import Navbar from '../components/Navbar';
-import TestingDashboard from './TestingDashboard'; // Import the new dashboard
+
 import {
     CheckCircle2,
     Clock,
     AlertCircle,
     TrendingUp,
     ListTodo,
-    ArrowRight
+    ArrowRight,
+    BarChart3
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toast } from 'react-toastify';
@@ -21,12 +22,8 @@ const Dashboard = () => {
     const [stats, setStats] = useState(null);
     const [recentTasks, setRecentTasks] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [isSchoolERPTeam, setIsSchoolERPTeam] = useState(false);
 
     useEffect(() => {
-        if (user?.email === 'prudvireddy7733@gmail.com') {
-            setIsSchoolERPTeam(true);
-        }
         fetchDashboardData();
     }, [user]);
 
@@ -44,36 +41,9 @@ const Dashboard = () => {
                 throw new Error('Failed to fetch dashboard data');
             }
 
-            const isOwner = user?.email?.toLowerCase().trim() === 'prudvireddy7733@gmail.com';
-
+            // The backend /stats/summary and /tasks routes already respect RBAC
             let visibleTasks = tasksData.tasks;
             let displayStats = statsData.stats;
-
-            if (!isOwner) {
-                // Filter tasks for non-owners
-                visibleTasks = tasksData.tasks.filter(t => t.assigneeId === user?.id);
-
-                // Recalculate stats based on assigned tasks
-                const total = visibleTasks.length;
-                const completed = visibleTasks.filter(t => t.status === 'Completed').length;
-                const inProgress = visibleTasks.filter(t => t.status === 'In Progress').length;
-
-                // Calculate overdue
-                const now = new Date();
-                const overdue = visibleTasks.filter(t => {
-                    const dueDate = new Date(t.dueDate);
-                    return t.status !== 'Completed' && dueDate < now;
-                }).length;
-
-                displayStats = {
-                    total,
-                    completed,
-                    inProgress,
-                    overdue,
-                    pending: total - completed,
-                    completionRate: total === 0 ? 0 : Math.round((completed / total) * 100)
-                };
-            }
 
             setStats(displayStats);
             setRecentTasks(visibleTasks.slice(0, 5));
@@ -91,10 +61,17 @@ const Dashboard = () => {
         }
     };
 
-    if (isSchoolERPTeam) {
-        return <TestingDashboard />;
+    if (loading) {
+        return (
+            <div className="page-container">
+                <Navbar />
+                <div className="loading-container">
+                    <div className="spinner"></div>
+                    <p>Loading dashboard...</p>
+                </div>
+            </div>
+        );
     }
-
     const statCards = stats ? [
         {
             title: 'Total Tasks',
@@ -177,6 +154,36 @@ const Dashboard = () => {
                 {stats && (
                     <div className="dashboard-grid">
                         <motion.div
+                            className="card"
+                            initial={{ opacity: 0, x: -20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.4 }}
+                        >
+                            <div className="card-header">
+                                <h3>Task Categories</h3>
+                                <BarChart3 size={20} className="text-primary" />
+                            </div>
+                            <div className="category-list">
+                                {stats.categoryDistribution ? (
+                                    Object.entries(stats.categoryDistribution).map(([cat, count]) => (
+                                        <div key={cat} className="category-item">
+                                            <span className="category-name">{cat.charAt(0) + cat.slice(1).toLowerCase()}</span>
+                                            <div className="category-bar-container">
+                                                <div
+                                                    className="category-bar"
+                                                    style={{ width: `${(count / stats.total) * 100}%` }}
+                                                ></div>
+                                            </div>
+                                            <span className="category-count">{count}</span>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p className="text-muted">No category data available</p>
+                                )}
+                            </div>
+                        </motion.div>
+
+                        <motion.div
                             className="card completion-card"
                             initial={{ opacity: 0, x: -20 }}
                             animate={{ opacity: 1, x: 0 }}
@@ -189,25 +196,11 @@ const Dashboard = () => {
                             <div className="completion-content">
                                 <div className="completion-circle">
                                     <svg viewBox="0 0 120 120">
-                                        <circle
-                                            cx="60"
-                                            cy="60"
-                                            r="50"
-                                            fill="none"
-                                            stroke="var(--bg-tertiary)"
-                                            strokeWidth="10"
-                                        />
-                                        <circle
-                                            cx="60"
-                                            cy="60"
-                                            r="50"
-                                            fill="none"
-                                            stroke="url(#gradient)"
-                                            strokeWidth="10"
+                                        <circle cx="60" cy="60" r="50" fill="none" stroke="var(--bg-tertiary)" strokeWidth="10" />
+                                        <circle cx="60" cy="60" r="50" fill="none" stroke="url(#gradient)" strokeWidth="10"
                                             strokeDasharray={`${stats.completionRate * 3.14} 314`}
                                             strokeLinecap="round"
-                                            transform="rotate(-90 60 60)"
-                                        />
+                                            transform="rotate(-90 60 60)" />
                                         <defs>
                                             <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
                                                 <stop offset="0%" stopColor="var(--primary)" />

@@ -1,4 +1,4 @@
-// Prisma schema for QuickTask - PostgreSQL with Accelerate
+// Prisma schema for QuickTask v2 - Category-Driven & Specialized Workflows
 
 generator client {
   provider = "prisma-client-js"
@@ -8,6 +8,8 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// --- ENUMS ---
 
 enum Priority {
   LOW
@@ -19,6 +21,7 @@ enum Status {
   TODO
   IN_PROGRESS
   COMPLETED
+  BLOCKED
 }
 
 enum TeamRole {
@@ -27,67 +30,259 @@ enum TeamRole {
   MEMBER
 }
 
+enum TaskCategory {
+  DEVELOPMENT
+  TESTING
+  DESIGN
+  MARKETING
+  DEVOPS
+  GENERAL
+}
+
+enum TestType {
+  MANUAL
+  AUTOMATED
+  REGRESSION
+  SMOKE
+  PERFORMANCE
+}
+
+enum CampaignPhase {
+  RESEARCH
+  STRATEGY
+  CREATIVE
+  EXECUTION
+  ANALYSIS
+}
+
+enum Environment {
+  DEVELOPMENT
+  STAGING
+  PRODUCTION
+}
+
+// --- MODELS ---
+
 model User {
-  id              Int          @id @default(autoincrement())
+  id              String       @id @default(cuid())
   name            String
   email           String       @unique
   password        String
+  avatar          String?
+  bio             String?
+  isActive        Boolean      @default(true)
+  lastActive      DateTime     @default(now())
+  
   ownedTeams      Team[]       @relation("TeamOwner")
   teamMemberships TeamMember[]
   createdTasks    Task[]       @relation("TaskCreator")
   assignedTasks   Task[]       @relation("TaskAssignee")
+  assignedSubTasks SubTask[]   @relation("SubTaskAssignee")
+  reportedBugs    BugReport[]  @relation("BugReporter")
+  assignedBugs    BugReport[]  @relation("BugAssignee")
+  submissions     Submission[]
   comments        Comment[]
+  attachments     Attachment[]
+  taskHistory     TaskHistory[]
+  
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 }
 
 model Team {
-  id          Int          @id @default(autoincrement())
+  id          String       @id @default(cuid())
   name        String
   description String?
-  ownerId     Int
+  avatar      String?
+  isActive    Boolean      @default(true)
+  
+  ownerId     String
   owner       User         @relation("TeamOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   members     TeamMember[]
   tasks       Task[]
   invites     TeamInvite[]
+  
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 }
 
 model TeamMember {
-  id        Int      @id @default(autoincrement())
-  teamId    Int
+  id        String   @id @default(cuid())
+  teamId    String
   team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  userId    Int
+  userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   role      TeamRole @default(MEMBER)
+  isActive  Boolean  @default(true)
   joinedAt  DateTime @default(now())
 
   @@unique([teamId, userId])
 }
 
 model Task {
-  id          Int       @id @default(autoincrement())
+  id          String       @id @default(cuid())
   title       String
   description String?
-  priority    Priority  @default(MEDIUM)
-  status      Status    @default(TODO)
-  dueDate     DateTime
-  completedAt DateTime?
-  creatorId   Int
-  creator     User      @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Cascade)
-  assigneeId  Int?
-  assignee    User?     @relation("TaskAssignee", fields: [assigneeId], references: [id])
-  teamId      Int?
-  team        Team?     @relation(fields: [teamId], references: [id])
-  comments    Comment[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  priority    Priority     @default(MEDIUM)
+  status      Status       @default(TODO)
+  category    TaskCategory @default(GENERAL)
+  
+  // Date Tracking
+  dueDate        DateTime
+  completedAt    DateTime?
+  estimatedHours Float?
+  actualHours    Float?
+  
+  // Relationships
+  creatorId      String
+  creator        User      @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  assigneeId     String?
+  assignee       User?     @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  
+  teamId         String?
+  team           Team?     @relation(fields: [teamId], references: [id])
+  
+  // SubTask Relation
+  subTasks        SubTask[]
+  
+  // Bug Reports Relation
+  bugReports      BugReport[]
+  
+  // Category-Specific Relations
+  developmentData DevelopmentTask?
+  testingData     TestingTask?
+  marketingData   MarketingTask?
+  devOpsData      DevOpsTask?
+  designData      DesignTask?
+  
+  submissions    Submission[]
+  comments       Comment[]
+  attachments    Attachment[]
+  history        TaskHistory[]
+  
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, priority, category])
+  @@index([teamId])
+  @@index([assigneeId])
+}
+
+model DevelopmentTask {
+  taskId      String   @id
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  repoLink    String?
+  branchName  String?
+  storyPoints Int?
+  techStack   String?
+  components  String[]
+  storyUrl    String?
+  epic        String?
+  sprintId    String?
+}
+
+model TestingTask {
+  taskId        String      @id
+  task          Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  testType      TestType    @default(MANUAL)
+  environment   Environment @default(STAGING)
+  testCases     Json?       // Array of { id, description, checked }
+  expectations  String?
+  automationUrl String?
+}
+
+model MarketingTask {
+  taskId        String        @id
+  task          Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  campaignType  String?
+  budget        Float?
+  platforms     String[]
+  kpis          String?
+  phase         CampaignPhase @default(RESEARCH)
+  roi           Float?
+}
+
+model DevOpsTask {
+  taskId        String      @id
+  task          Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  environment   Environment @default(STAGING)
+  iacRef        String?
+  riskLevel     String?     @default("Low")
+  deploymentUrl String?
+  rollbackPlan  String?
+}
+
+model DesignTask {
+  taskId        String   @id
+  task          Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  designType    String?
+  figmaLink     String?
+  assets        String[]
+  revisionCount Int      @default(0)
+}
+
+model Attachment {
+  id         String   @id @default(cuid())
+  fileName   String
+  fileType   String
+  fileSize   Int
+  url        String
+  isPublic   Boolean  @default(false)
+  
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy String
+  user       User     @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+  
+  createdAt  DateTime @default(now())
+  
+  @@index([taskId])
+}
+
+model Submission {
+  id        String   @id @default(cuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  fileUrls  String[]
+  feedback  String?
+  createdAt DateTime @default(now())
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  isEdited  Boolean  @default(false)
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TaskHistory {
+  id        String   @id @default(cuid())
+  action    String
+  oldValue  String?
+  newValue  String?
+  fieldName String
+  
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  
+  @@index([taskId, createdAt])
 }
 
 model TeamInvite {
-  id        Int      @id @default(autoincrement())
-  teamId    Int
+  id        String   @id @default(cuid())
+  teamId    String
   team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   email     String
   role      TeamRole @default(MEMBER)
@@ -98,13 +293,62 @@ model TeamInvite {
   @@index([email, teamId])
 }
 
-model Comment {
-  id        Int      @id @default(autoincrement())
-  content   String
-  taskId    Int
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  userId    Int
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model BugReport {
+  id            String      @id @default(cuid())
+  title         String
+  description   String?
+  severity      String      @default("MEDIUM")
+  environment   Environment @default(STAGING)
+  steps         String?
+  expected      String?
+  actual        String?
+  resolutionNotes String?
+  status        Status      @default(TODO)
+  priority      Priority    @default(MEDIUM)
+  
+  // Relationships
+  taskId        String
+  task          Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  reporterId    String
+  reporter      User        @relation("BugReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  
+  assigneeId    String?
+  assignee      User?       @relation("BugAssignee", fields: [assigneeId], references: [id])
+  
+  teamId        String?
+  
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  resolvedAt    DateTime?
+  
+  @@index([taskId])
+  @@index([status])
+  @@index([severity])
+  @@index([reporterId])
+  @@index([assigneeId])
+}
+
+model SubTask {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  status      Status   @default(TODO)
+  priority    Priority @default(MEDIUM)
+  
+  taskId      String
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  
+  assigneeId  String?
+  assignee    User?    @relation("SubTaskAssignee", fields: [assigneeId], references: [id])
+  
+  completedAt DateTime?
+  dueDate     DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([taskId])
+  @@index([status])
+  @@index([assigneeId])
 }

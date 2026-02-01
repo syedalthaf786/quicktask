@@ -64,9 +64,6 @@ const Navbar = () => {
                     </button>
 
                     <div className="navbar-user">
-                        <div className="user-avatar">
-                            <User size={18} />
-                        </div>
                         <div className="user-info">
                             <span className="user-name">{user?.name}</span>
                             <span className="user-email">{user?.email}</span>

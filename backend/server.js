@@ -32,6 +32,7 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/teams', teamRoutes);
+app.use('/api/stats', require('./routes/analytics'));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

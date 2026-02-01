@@ -56,7 +56,9 @@ router.post('/register', [
             data: {
                 name,
                 email,
-                password: hashedPassword
+                password: hashedPassword,
+                avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`,
+                isActive: true
             }
         });
 
@@ -70,7 +72,10 @@ router.post('/register', [
             user: {
                 id: user.id,
                 name: user.name,
-                email: user.email
+                email: user.email,
+                avatar: user.avatar,
+                bio: user.bio,
+                isActive: user.isActive
             }
         });
     } catch (error) {
@@ -123,6 +128,12 @@ router.post('/login', [
             });
         }
 
+        // Update lastActive
+        await prisma.user.update({
+            where: { id: user.id },
+            data: { lastActive: new Date(), isActive: true }
+        });
+
         // Generate token
         const token = generateToken(user.id);
 
@@ -133,7 +144,10 @@ router.post('/login', [
             user: {
                 id: user.id,
                 name: user.name,
-                email: user.email
+                email: user.email,
+                avatar: user.avatar,
+                bio: user.bio,
+                isActive: user.isActive
             }
         });
     } catch (error) {
@@ -151,12 +165,17 @@ router.post('/login', [
 // @access  Private
 router.get('/me', protect, async (req, res) => {
     try {
+        const user = req.user;
         res.status(200).json({
             success: true,
             user: {
-                id: req.user.id,
-                name: req.user.name,
-                email: req.user.email
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                avatar: user.avatar,
+                bio: user.bio,
+                isActive: user.isActive,
+                lastActive: user.lastActive
             }
         });
     } catch (error) {
