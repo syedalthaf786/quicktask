@@ -222,7 +222,6 @@ exports.createTask = async (req, res) => {
             priority: priority ? priority.toUpperCase() : 'MEDIUM',
             status: status ? status.toUpperCase().replace(' ', '_') : 'TODO',
             category: finalCategory,
-            isBugReport: isBugReport, // Use the flag
             dueDate: parsedDueDate,
             estimatedHours: estimatedHours ? parseFloat(estimatedHours) : null,
             creatorId: req.user.id,
