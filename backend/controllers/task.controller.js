@@ -107,7 +107,9 @@ exports.getTasks = async (req, res) => {
         res.status(200).json({ success: true, count: filteredTasks.length, tasks: filteredTasks });
     } catch (error) {
         console.error('Get tasks error:', error);
-        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+        console.error('Error name:', error.name);
+        console.error('Error code:', error.code);
+        res.status(500).json({ success: false, message: 'Server error', error: error.message, errorCode: error.code });
     }
 };
 
