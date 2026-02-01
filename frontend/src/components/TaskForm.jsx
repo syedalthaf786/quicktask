@@ -88,7 +88,28 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const dataToSubmit = { ...formData };
+            const dataToSubmit = { 
+                ...formData,
+                // Remove fields that don't exist in the backend schema
+                repoLink: undefined, 
+                branchName: undefined, 
+                techStack: undefined,
+                testType: undefined, 
+                testingEnv: undefined,
+                campaignType: undefined, 
+                platform: undefined,
+                riskLevel: undefined, 
+                devOpsEnv: undefined,
+                designType: undefined, 
+                figmaLink: undefined
+            };
+            
+            // Clean up undefined values
+            Object.keys(dataToSubmit).forEach(key => {
+                if (dataToSubmit[key] === undefined) {
+                    delete dataToSubmit[key];
+                }
+            });
             
             if (task) {
                 await taskService.updateTask(task.id, dataToSubmit);
