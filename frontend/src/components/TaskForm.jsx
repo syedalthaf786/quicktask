@@ -10,6 +10,7 @@ import './TaskForm.css';
 
 const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {} }) => {
     const [step, setStep] = useState(task ? 'form' : 'category');
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const [formData, setFormData] = useState({
         title: '',
         description: '',
@@ -71,73 +72,88 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                 setTaskCreatedId(null); // Reset to prevent repeated calls
             }
         };
-        
+
         createSubtasks();
     }, [taskCreatedId, formData.subTasks]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+
+        // Prevent double submission
+        if (isSubmitting) return;
+
+        setIsSubmitting(true);
+        const isEditing = !!task;
+
         try {
-            const dataToSubmit = { 
+            const dataToSubmit = {
                 ...formData,
                 // Remove fields that don't exist in the backend schema
-                repoLink: undefined, 
-                branchName: undefined, 
+                repoLink: undefined,
+                branchName: undefined,
                 techStack: undefined,
-                testType: undefined, 
+                testType: undefined,
                 testingEnv: undefined,
-                campaignType: undefined, 
+                campaignType: undefined,
                 platform: undefined,
-                riskLevel: undefined, 
+                riskLevel: undefined,
                 devOpsEnv: undefined,
-                designType: undefined, 
+                designType: undefined,
                 figmaLink: undefined
             };
-            
+
             // Clean up undefined values
             Object.keys(dataToSubmit).forEach(key => {
                 if (dataToSubmit[key] === undefined) {
                     delete dataToSubmit[key];
                 }
             });
-            
-            if (task) {
+
+            if (isEditing) {
                 await taskService.updateTask(task.id, dataToSubmit);
                 // Update specialized
                 const specialized = ['DEVELOPMENT', 'TESTING', 'MARKETING', 'DEVOPS', 'DESIGN'];
                 if (specialized.includes(formData.category)) {
                     await taskService.updateSpecializedData(task.id, formData.category, dataToSubmit);
                 }
-                
+
                 // Update subtasks if they exist
                 if (formData.subTasks) {
                     // For now, we'll just update the task and handle subtasks separately
                     // In a more complete implementation, we would handle subtask updates
                 }
-                
-                toast.success('Task updated');
+
+                // Success - show toast and close modal
+                toast.success('Task updated successfully!');
             } else {
                 const response = await taskService.createTask(dataToSubmit);
                 // Store the created task ID to create subtasks after the task is created
                 const createdTaskId = response.task.id;
-                
+
                 // Mark that we need to create subtasks for this task
                 setTaskCreatedId(createdTaskId);
-                
-                toast.success('Task created');
+
+                // Success - show toast and close modal
+                toast.success('Task created successfully!');
             }
-            
+
+            // Only close and refresh on success
             if (onSuccess) onSuccess();
             onClose();
+
         } catch (error) {
+            // Show error and keep modal open for user to fix
             toast.error(error.response?.data?.message || 'Failed to save task');
+            console.error('Task save error:', error);
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
     const categories = [
         { id: 'DEVELOPMENT', label: 'Development', icon: '💻', desc: 'Code, API, Features' },
-        { id: 'TESTING', label: 'QA / Testing', icon: '🧪', desc: 'Bugs, Manual, Auto' },
-        { id: 'DESIGN', label: 'UI/UX Design', icon: '🎨', desc: 'Figma, Mockups' }, // New
+        { id: 'TESTING', label: 'Quality Assurance', icon: '🧪', desc: 'Test Plans, Manual Testing' },
+        { id: 'DESIGN', label: 'UI/UX Design', icon: '🎨', desc: 'Figma, Mockups' },
         { id: 'MARKETING', label: 'Marketing', icon: '📢', desc: 'Campaigns, Ads' },
         { id: 'DEVOPS', label: 'DevOps', icon: '⚙️', desc: 'CI/CD, Deploy' },
         { id: 'GENERAL', label: 'General', icon: '📝', desc: 'Default tasks' }
@@ -194,31 +210,167 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                                     </select>
                                 </div>
                                 <div className="input-group">
-                                    <label>Assignee</label>
-                                    <select value={formData.assigneeId || ''} onChange={e => setFormData({ ...formData, assigneeId: e.target.value })}>
-                                        <option value="">Unassigned</option>
-                                        {teamMembers && teamMembers.length > 0 ? (
-                                            teamMembers.map(member => {
-                                                const user = member.user || member;
-                                                return <option key={user.id} value={user.id}>{user.name}</option>;
-                                            })
-                                        ) : null}
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="form-row">
-                                <div className="input-group">
                                     <label>Due Date</label>
                                     <input type="date" value={formData.dueDate} onChange={e => setFormData({ ...formData, dueDate: e.target.value })} required />
                                 </div>
+                            </div>
+
+                            {/* Category-specific fields */}
+                            {formData.category === 'DEVELOPMENT' && (
+                                <>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>Repository Link</label>
+                                            <input type="url" value={formData.repoLink || ''} onChange={e => setFormData({ ...formData, repoLink: e.target.value })} placeholder="https://github.com/..." />
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Branch Name</label>
+                                            <input type="text" value={formData.branchName || ''} onChange={e => setFormData({ ...formData, branchName: e.target.value })} placeholder="main, develop, etc." />
+                                        </div>
+                                    </div>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>Tech Stack (comma-separated)</label>
+                                            <input type="text" value={formData.techStack || ''} onChange={e => setFormData({ ...formData, techStack: e.target.value })} placeholder="React, Node.js, MongoDB" />
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Components (comma-separated)</label>
+                                            <input type="text" value={formData.components || ''} onChange={e => setFormData({ ...formData, components: e.target.value })} placeholder="Header, Footer, Dashboard" />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            {formData.category === 'TESTING' && (
+                                <>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>Test Type</label>
+                                            <select value={formData.testType || 'MANUAL'} onChange={e => setFormData({ ...formData, testType: e.target.value })}>
+                                                <option value="MANUAL">Manual</option>
+                                                <option value="AUTOMATED">Automated</option>
+                                                <option value="REGRESSION">Regression</option>
+                                                <option value="SMOKE">Smoke</option>
+                                                <option value="PERFORMANCE">Performance</option>
+                                            </select>
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Environment</label>
+                                            <select value={formData.environment || 'STAGING'} onChange={e => setFormData({ ...formData, environment: e.target.value })}>
+                                                <option value="DEVELOPMENT">Development</option>
+                                                <option value="STAGING">Staging</option>
+                                                <option value="PRODUCTION">Production</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="input-group">
+                                        <label>Test Expectations</label>
+                                        <textarea value={formData.expectations || ''} onChange={e => setFormData({ ...formData, expectations: e.target.value })} placeholder="What should be the expected outcome..." rows={3}></textarea>
+                                    </div>
+                                </>
+                            )}
+
+                            {formData.category === 'MARKETING' && (
+                                <>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>Campaign Type</label>
+                                            <input type="text" value={formData.campaignType || ''} onChange={e => setFormData({ ...formData, campaignType: e.target.value })} placeholder="Email Campaign, Social Media, etc." />
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Budget</label>
+                                            <input type="number" value={formData.budget || ''} onChange={e => setFormData({ ...formData, budget: e.target.value })} placeholder="5000" />
+                                        </div>
+                                    </div>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>Platforms (comma-separated)</label>
+                                            <input type="text" value={formData.platforms || ''} onChange={e => setFormData({ ...formData, platforms: e.target.value })} placeholder="Facebook, Instagram, LinkedIn" />
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Campaign Phase</label>
+                                            <select value={formData.phase || 'RESEARCH'} onChange={e => setFormData({ ...formData, phase: e.target.value })}>
+                                                <option value="RESEARCH">Research</option>
+                                                <option value="STRATEGY">Strategy</option>
+                                                <option value="CREATIVE">Creative</option>
+                                                <option value="EXECUTION">Execution</option>
+                                                <option value="ANALYSIS">Analysis</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            {formData.category === 'DEVOPS' && (
+                                <>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>Environment</label>
+                                            <select value={formData.environment || 'STAGING'} onChange={e => setFormData({ ...formData, environment: e.target.value })}>
+                                                <option value="DEVELOPMENT">Development</option>
+                                                <option value="STAGING">Staging</option>
+                                                <option value="PRODUCTION">Production</option>
+                                            </select>
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Risk Level</label>
+                                            <select value={formData.riskLevel || 'LOW'} onChange={e => setFormData({ ...formData, riskLevel: e.target.value })}>
+                                                <option value="LOW">Low</option>
+                                                <option value="MEDIUM">Medium</option>
+                                                <option value="HIGH">High</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>IaC Reference</label>
+                                            <input type="text" value={formData.iacRef || ''} onChange={e => setFormData({ ...formData, iacRef: e.target.value })} placeholder="Terraform module, CloudFormation template, etc." />
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Deployment URL</label>
+                                            <input type="url" value={formData.deploymentUrl || ''} onChange={e => setFormData({ ...formData, deploymentUrl: e.target.value })} placeholder="https://app.example.com" />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            {formData.category === 'DESIGN' && (
+                                <>
+                                    <div className="form-row">
+                                        <div className="input-group">
+                                            <label>Design Type</label>
+                                            <input type="text" value={formData.designType || ''} onChange={e => setFormData({ ...formData, designType: e.target.value })} placeholder="UI Design, Logo, Banner, etc." />
+                                        </div>
+                                        <div className="input-group">
+                                            <label>Figma Link</label>
+                                            <input type="url" value={formData.figmaLink || ''} onChange={e => setFormData({ ...formData, figmaLink: e.target.value })} placeholder="https://figma.com/file/..." />
+                                        </div>
+                                    </div>
+                                    <div className="input-group">
+                                        <label>Design Assets (comma-separated)</label>
+                                        <input type="text" value={formData.assets || ''} onChange={e => setFormData({ ...formData, assets: e.target.value })} placeholder="Logo, Banner, Icons, etc." />
+                                    </div>
+                                </>
+                            )}
+
+                            <div className="input-group">
+                                <label>Assignee</label>
+                                <select value={formData.assigneeId || ''} onChange={e => setFormData({ ...formData, assigneeId: e.target.value })}>
+                                    <option value="">Unassigned</option>
+                                    {teamMembers && teamMembers.length > 0 ? (
+                                        teamMembers.map(member => {
+                                            const user = member.user || member;
+                                            return <option key={user.id} value={user.id}>{user.name}</option>;
+                                        })
+                                    ) : null}
+                                </select>
+                            </div>
+
+                            <div className="form-row">
                                 <div className="input-group">
                                     <label>Estimated Hours</label>
                                     <input type="number" step="0.5" value={formData.estimatedHours} onChange={e => setFormData({ ...formData, estimatedHours: e.target.value })} />
                                 </div>
-                            </div>
-
-                            <div className="form-row">
                                 {task && (
                                     <div className="input-group">
                                         <label>Actual Hours</label>
@@ -227,84 +379,147 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                                 )}
                             </div>
 
-                            {/* Category Specifics */}
-                            {formData.category === 'DESIGN' && (
-                                <div className="specialized-fields">
-                                    <div className="input-group">
-                                        <label>Design Type</label>
-                                        <select value={formData.designType} onChange={e => setFormData({ ...formData, designType: e.target.value })}>
-                                            <option value="UI">UI Design</option>
-                                            <option value="UX">UX Research</option>
-                                            <option value="GRAPHIC">Graphic Design</option>
-                                        </select>
-                                    </div>
-                                    <div className="input-group">
-                                        <label>Figma Link</label>
-                                        <input type="url" value={formData.figmaLink} onChange={e => setFormData({ ...formData, figmaLink: e.target.value })} placeholder="https://figma.com/..." />
-                                    </div>
-                                </div>
-                            )}
-
                             <div className="input-group">
                                 <label>Description</label>
                                 <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows="3" />
                             </div>
 
-                            {/* Subtasks Checklist (New) */}
+                            {/* Subtasks Section - Improved UI */}
                             <div className="subtasks-section" style={{ marginTop: '1.5rem', marginBottom: '1.5rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                                    <label style={{ fontWeight: 600 }}>Subtasks</label>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                    <label style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--text-primary)' }}>Subtasks</label>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                        {formData.subTasks?.length || 0} subtask{(formData.subTasks?.length || 0) !== 1 ? 's' : ''}
+                                    </span>
                                 </div>
 
-                                <div className="subtasks-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '10px' }}>
-                                    {formData.subTasks && formData.subTasks.map((st, idx) => (
-                                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-secondary)', padding: '8px 12px', borderRadius: '8px' }}>
-                                            <div style={{ flex: 1, fontWeight: 500 }}>{st.title}</div>
-                                            <button type="button" onClick={() => {
-                                                const newSubtasks = [...formData.subTasks];
-                                                newSubtasks.splice(idx, 1);
-                                                setFormData({ ...formData, subTasks: newSubtasks });
-                                            }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}>
-                                                <Trash2 size={16} />
-                                            </button>
+                                <div className="subtasks-list" style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '15px' }}>
+                                    {formData.subTasks && formData.subTasks.length > 0 ? (
+                                        formData.subTasks.map((st, idx) => (
+                                            <motion.div
+                                                key={idx}
+                                                initial={{ opacity: 0, x: -20 }}
+                                                animate={{ opacity: 1, x: 0 }}
+                                                exit={{ opacity: 0, x: 20 }}
+                                                style={{
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '12px',
+                                                    background: 'var(--bg-secondary)',
+                                                    padding: '12px 16px',
+                                                    borderRadius: '10px',
+                                                    border: '1px solid var(--border-color)',
+                                                    transition: 'all 0.2s'
+                                                }}
+                                                whileHover={{ boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
+                                            >
+                                                <div style={{
+                                                    width: '8px',
+                                                    height: '8px',
+                                                    borderRadius: '50%',
+                                                    background: 'var(--primary)',
+                                                    flexShrink: 0
+                                                }} />
+                                                <div style={{ flex: 1, fontWeight: 500, color: 'var(--text-primary)' }}>{st.title}</div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const newSubtasks = [...formData.subTasks];
+                                                        newSubtasks.splice(idx, 1);
+                                                        setFormData({ ...formData, subTasks: newSubtasks });
+                                                    }}
+                                                    style={{
+                                                        background: 'none',
+                                                        border: 'none',
+                                                        color: '#ef4444',
+                                                        cursor: 'pointer',
+                                                        padding: '4px',
+                                                        borderRadius: '4px',
+                                                        transition: 'all 0.2s'
+                                                    }}
+                                                    onMouseEnter={(e) => e.currentTarget.style.background = '#fee2e2'}
+                                                    onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </motion.div>
+                                        ))
+                                    ) : (
+                                        <div style={{
+                                            textAlign: 'center',
+                                            padding: '20px',
+                                            color: 'var(--text-secondary)',
+                                            fontSize: '0.9rem',
+                                            background: 'var(--bg-secondary)',
+                                            borderRadius: '10px',
+                                            border: '1px dashed var(--border-color)'
+                                        }}>
+                                            No subtasks yet. Add one below!
                                         </div>
-                                    ))}
+                                    )}
                                 </div>
 
                                 <div className="add-subtask-row" style={{ display: 'flex', gap: '10px' }}>
                                     <input
                                         type="text"
-                                        placeholder="Add a subtask..."
+                                        placeholder="Type subtask and press Enter or click +"
                                         id="new-subtask-title"
                                         onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
                                                 e.preventDefault();
                                                 const title = e.target.value;
                                                 if (title.trim()) {
-                                                    const newSubtask = { title };
+                                                    const newSubtask = { title: title.trim() };
                                                     setFormData({ ...formData, subTasks: [...(formData.subTasks || []), newSubtask] });
                                                     e.target.value = '';
+                                                    toast.success('Subtask added!');
                                                 }
                                             }
                                         }}
-                                        style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color)' }}
+                                        style={{
+                                            flex: 1,
+                                            padding: '12px 16px',
+                                            borderRadius: '10px',
+                                            border: '1px solid var(--border-color)',
+                                            fontSize: '0.95rem',
+                                            transition: 'all 0.2s'
+                                        }}
                                     />
-                                    <button type="button" className="btn btn-secondary" onClick={() => {
-                                        const titleInput = document.getElementById('new-subtask-title');
-                                        if (titleInput.value.trim()) {
-                                            const newSubtask = { title: titleInput.value };
-                                            setFormData({ ...formData, subTasks: [...(formData.subTasks || []), newSubtask] });
-                                            titleInput.value = '';
-                                        }
-                                    }}>
-                                        <Plus size={18} />
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        onClick={() => {
+                                            const titleInput = document.getElementById('new-subtask-title');
+                                            if (titleInput.value.trim()) {
+                                                const newSubtask = { title: titleInput.value.trim() };
+                                                setFormData({ ...formData, subTasks: [...(formData.subTasks || []), newSubtask] });
+                                                titleInput.value = '';
+                                                toast.success('Subtask added!');
+                                            }
+                                        }}
+                                        style={{
+                                            padding: '12px 16px',
+                                            borderRadius: '10px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px'
+                                        }}
+                                    >
+                                        <Plus size={18} /> Add
                                     </button>
                                 </div>
                             </div>
 
                             {task && <AttachmentManager taskId={task.id} attachments={task.attachments} readOnly={false} />}
 
-                            <button type="submit" className="btn btn-primary">Save Task</button>
+                            <button
+                                type="submit"
+                                className="btn btn-primary"
+                                disabled={isSubmitting}
+                                style={{ opacity: isSubmitting ? 0.7 : 1, cursor: isSubmitting ? 'not-allowed' : 'pointer' }}
+                            >
+                                {isSubmitting ? 'Saving...' : 'Save Task'}
+                            </button>
                         </form>
                     )}
                 </div>

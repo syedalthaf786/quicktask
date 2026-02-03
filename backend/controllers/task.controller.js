@@ -1,61 +1,15 @@
 
 const prisma = require('../lib/prisma');
 const { validationResult } = require('express-validator');
-
-// Helper access check
-async function checkTaskAccess(taskId, userId) {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return null;
-    const task = await prisma.task.findUnique({ where: { id: taskId } });
-
-    if (!task) return null;
-    if (!task) return null;
-
-    // Check if user is the team owner of the task's team
-    let isTeamOwner = false;
-    if (task.teamId) {
-        const team = await prisma.team.findUnique({ where: { id: task.teamId } });
-        if (team && team.ownerId === userId) isTeamOwner = true;
-    }
-
-    // Only team owners can see all tasks in their teams
-    if (isTeamOwner) return task;
-    // Creators and assignees can always access their own tasks
-    if (task.creatorId === userId || task.assigneeId === userId) return task;
-
-    return null;
-}
+const accessService = require('../services/access.service');
 
 exports.getTasks = async (req, res) => {
     try {
         const { status, priority, search, sortBy, order, category, teamId } = req.query;
         const userId = req.user.id;
 
-        // We will fetch tasks and filter by visibility.
-        // Or construct the where clause carefully.
-
-        let where = {};
-
-        // Base visibility:
-        // 1. Creator = me
-        // 2. Assignee = me
-        // 3. Team Member = me (implicitly handled by teamId filter or global visible)
-        // 4. Team Owner = me
-
-        // To handle "Team Owner sees all team tasks", we can check if user owns any teams
-        const ownedTeams = await prisma.team.findMany({ where: { ownerId: userId }, select: { id: true } });
-        const ownedTeamIds = ownedTeams.map(t => t.id);
-
-        // Build where condition based on user role
-        // Team owners can see all tasks in their teams
-        // Regular users can only see tasks they created or are assigned to
-        where = {
-            OR: [
-                { creatorId: userId },
-                { assigneeId: userId },
-                { teamId: { in: ownedTeamIds } }
-            ]
-        };
+        // Use centralized visibility filter
+        let where = await accessService.getTaskVisibilityFilter(userId);
 
         // With the new SubTask model, subtasks are stored separately and won't appear in main task list
         // No need to filter by parentId since it doesn't exist in the schema
@@ -75,15 +29,13 @@ exports.getTasks = async (req, res) => {
         if (sortBy) orderBy[sortBy] = order === 'asc' ? 'asc' : 'desc';
         else orderBy.createdAt = 'desc';
 
-        console.log('Query WHERE:', JSON.stringify(where, null, 2));
-
         const tasks = await prisma.task.findMany({
             where,
             orderBy,
             include: {
                 creator: { select: { id: true, name: true, email: true, avatar: true } },
                 assignee: { select: { id: true, name: true, email: true, avatar: true } },
-                team: { select: { id: true, name: true, avatar: true } },
+                team: { select: { id: true, name: true, avatar: true, ownerId: true } },
                 developmentData: true,
                 testingData: true,
                 marketingData: true,
@@ -107,9 +59,7 @@ exports.getTasks = async (req, res) => {
         res.status(200).json({ success: true, count: filteredTasks.length, tasks: filteredTasks });
     } catch (error) {
         console.error('Get tasks error:', error);
-        console.error('Error name:', error.name);
-        console.error('Error code:', error.code);
-        res.status(500).json({ success: false, message: 'Server error', error: error.message, errorCode: error.code });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 
@@ -117,7 +67,7 @@ exports.getTaskById = async (req, res) => {
     try {
         const taskId = req.params.id;
         const userId = req.user.id;
-        const task = await checkTaskAccess(taskId, userId);
+        const task = await accessService.checkTaskAccess(taskId, userId);
 
         if (!task) return res.status(404).json({ success: false, message: 'Task not found or access denied' });
 
@@ -126,7 +76,7 @@ exports.getTaskById = async (req, res) => {
             include: {
                 creator: { select: { id: true, name: true, email: true, avatar: true } },
                 assignee: { select: { id: true, name: true, email: true, avatar: true } },
-                team: { select: { id: true, name: true, avatar: true } },
+                team: { select: { id: true, name: true, avatar: true, ownerId: true } },
                 developmentData: true,
                 testingData: true,
                 marketingData: true,
@@ -151,28 +101,13 @@ exports.getTaskById = async (req, res) => {
             }
         });
 
-        let isTeamOwner = false;
-        if (fullTask.team) {
-            // Need to verify ownership. fullTask.team only has id/name/avatar selected.
-            // We need to either select ownerId or fetch team again.
-            // Let's modify the include above to get ownerId.
-            const teamCheck = await prisma.team.findUnique({ where: { id: fullTask.teamId } });
-            if (teamCheck && teamCheck.ownerId === userId) isTeamOwner = true;
-        }
-
-        const isOwner = isTeamOwner; // Alias for readability
-        const isCreator = fullTask.creatorId === userId;
-        const isAssignee = fullTask.assigneeId === userId;
+        // Calculate permissions using centralized service
+        const permissions = await accessService.getTaskPermissions(fullTask, userId);
 
         res.status(200).json({
             success: true,
             task: fullTask,
-            permissions: {
-                canEdit: isOwner || isCreator,
-                canUpdateStatus: isOwner || isCreator || isAssignee,
-                canComment: true,
-                canDelete: isOwner || isCreator
-            }
+            permissions
         });
     } catch (error) {
         console.error('Get task error:', error);
@@ -191,11 +126,11 @@ exports.createTask = async (req, res) => {
         if (!title || title.trim() === '') {
             return res.status(400).json({ success: false, message: 'Title is required' });
         }
-        
+
         if (!dueDate) {
             return res.status(400).json({ success: false, message: 'Due date is required' });
         }
-        
+
         // Parse dueDate safely
         const parsedDueDate = new Date(dueDate);
         if (isNaN(parsedDueDate.getTime())) {
@@ -206,11 +141,9 @@ exports.createTask = async (req, res) => {
         const titleLower = title.toLowerCase();
         const descLower = (description || '').toLowerCase();
         let finalCategory = category || 'GENERAL';
-        const isBugReport = titleLower.startsWith('[bug]') || category === 'TESTING'; // Allow explicit bug category too
 
         if (!category) {
-            if (isBugReport) finalCategory = 'TESTING';
-            else if (titleLower.includes('design') || titleLower.includes('ui')) finalCategory = 'DESIGN';
+            if (titleLower.includes('design') || titleLower.includes('ui')) finalCategory = 'DESIGN';
             else if (titleLower.includes('dev') || descLower.includes('backend')) finalCategory = 'DEVELOPMENT';
             else if (titleLower.includes('market')) finalCategory = 'MARKETING';
             else if (titleLower.includes('deploy')) finalCategory = 'DEVOPS';
@@ -245,7 +178,7 @@ exports.createTask = async (req, res) => {
 
         // Note: bugMetadata and isBugReport fields are not in the Prisma schema
         // Bug reports should be created as separate BugReport records linked to tasks
-        
+
         const task = await prisma.$transaction(async (tx) => {
             const createdTask = await tx.task.create({
                 data: taskData,
@@ -282,7 +215,7 @@ exports.createTask = async (req, res) => {
         console.error('Error name:', error.name);
         console.error('Error code:', error.code);
         console.error('Error meta:', JSON.stringify(error.meta || {}));
-        
+
         // Handle specific Prisma errors
         if (error.code === 'P2002') {
             return res.status(400).json({ success: false, message: 'A task with this title already exists' });
@@ -293,7 +226,7 @@ exports.createTask = async (req, res) => {
         if (error.code === 'P2025') {
             return res.status(400).json({ success: false, message: 'Record not found - may be deleted or not yet created' });
         }
-        
+
         res.status(500).json({ success: false, message: 'Server error', error: error.message, errorCode: error.code });
     }
 };
@@ -302,7 +235,7 @@ exports.updateTask = async (req, res) => {
     try {
         const taskId = req.params.id;
         const userId = req.user.id;
-        const existingTask = await checkTaskAccess(taskId, userId);
+        const existingTask = await accessService.checkTaskAccess(taskId, userId);
         if (!existingTask) return res.status(404).json({ success: false, message: 'Not found' });
 
         let isTeamOwner = false;
@@ -314,7 +247,7 @@ exports.updateTask = async (req, res) => {
         const isCreator = existingTask.creatorId === userId;
 
         const updateData = {};
-        const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'assigneeId', 'teamId', 'estimatedHours', 'actualHours'];
+        const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'assigneeId', 'teamId', 'estimatedHours', 'actualHours', 'progress'];
 
         // Logic for permissions (simplified)
         if (isOwner || isCreator) {
@@ -329,6 +262,47 @@ exports.updateTask = async (req, res) => {
 
         if (updateData.status === 'COMPLETED') updateData.completedAt = new Date();
         else if (updateData.status && updateData.status !== 'COMPLETED') updateData.completedAt = null;
+
+        // Handle progress updates for all task categories
+        if (req.body.progress !== undefined) {
+            // Store progress in the appropriate category-specific table
+            switch (existingTask.category) {
+                case 'DEVELOPMENT':
+                    await prisma.developmentTask.update({
+                        where: { taskId },
+                        data: { progress: req.body.progress }
+                    });
+                    break;
+                case 'TESTING':
+                    await prisma.testingTask.update({
+                        where: { taskId },
+                        data: { testCases: req.body.progress }
+                    });
+                    break;
+                case 'MARKETING':
+                    await prisma.marketingTask.update({
+                        where: { taskId },
+                        data: { progress: req.body.progress }
+                    });
+                    break;
+                case 'DEVOPS':
+                    await prisma.devOpsTask.update({
+                        where: { taskId },
+                        data: { progress: req.body.progress }
+                    });
+                    break;
+                case 'DESIGN':
+                    await prisma.designTask.update({
+                        where: { taskId },
+                        data: { progress: req.body.progress }
+                    });
+                    break;
+                default:
+                    // For GENERAL tasks, store in main task model if needed
+                    // Or ignore if not applicable
+                    break;
+            }
+        }
 
         const updatedTask = await prisma.$transaction(async (tx) => {
             const result = await tx.task.update({
@@ -391,13 +365,13 @@ exports.getSubTasks = async (req, res) => {
     try {
         const taskId = req.params.taskId;
         const userId = req.user.id;
-        
+
         // First check if user has access to the parent task
-        const parentTask = await checkTaskAccess(taskId, userId);
+        const parentTask = await accessService.checkTaskAccess(taskId, userId);
         if (!parentTask) {
             return res.status(404).json({ success: false, message: 'Parent task not found or access denied' });
         }
-        
+
         const subTasks = await prisma.subTask.findMany({
             where: { taskId: taskId },
             include: {
@@ -405,7 +379,7 @@ exports.getSubTasks = async (req, res) => {
             },
             orderBy: { createdAt: 'desc' }
         });
-        
+
         res.status(200).json({ success: true, subTasks });
     } catch (error) {
         console.error('Get subtasks error:', error);
@@ -417,19 +391,19 @@ exports.createSubTask = async (req, res) => {
     try {
         const taskId = req.params.taskId;
         const userId = req.user.id;
-        
+
         // Check if user has access to the parent task
-        const parentTask = await checkTaskAccess(taskId, userId);
+        const parentTask = await accessService.checkTaskAccess(taskId, userId);
         if (!parentTask) {
             return res.status(404).json({ success: false, message: 'Parent task not found or access denied' });
         }
-        
+
         const { title, description, status, priority, assigneeId, dueDate } = req.body;
-        
+
         if (!title) {
             return res.status(400).json({ success: false, message: 'Title is required for subtask' });
         }
-        
+
         // Check if assignee exists and is part of the team
         if (assigneeId) {
             if (parentTask.teamId) {
@@ -443,7 +417,7 @@ exports.createSubTask = async (req, res) => {
                 // For personal tasks, allow assigning to anyone
             }
         }
-        
+
         const subTask = await prisma.subTask.create({
             data: {
                 title,
@@ -458,7 +432,7 @@ exports.createSubTask = async (req, res) => {
                 assignee: { select: { id: true, name: true, email: true, avatar: true } }
             }
         });
-        
+
         res.status(201).json({ success: true, subTask });
     } catch (error) {
         console.error('Create subtask error:', error);
@@ -471,39 +445,39 @@ exports.updateSubTask = async (req, res) => {
         const subTaskId = req.params.subTaskId;
         const taskId = req.params.taskId;
         const userId = req.user.id;
-        
+
         // Check if user has access to the parent task
-        const parentTask = await checkTaskAccess(taskId, userId);
+        const parentTask = await accessService.checkTaskAccess(taskId, userId);
         if (!parentTask) {
             return res.status(404).json({ success: false, message: 'Parent task not found or access denied' });
         }
-        
+
         // Check if the subtask belongs to the parent task
         const existingSubTask = await prisma.subTask.findUnique({
             where: { id: subTaskId },
             include: { assignee: true }
         });
-        
+
         if (!existingSubTask || existingSubTask.taskId !== taskId) {
             return res.status(404).json({ success: false, message: 'Subtask not found' });
         }
-        
+
         // Check permissions: only assignee, creator of parent task, or team owner can update
         const isAssignee = existingSubTask.assigneeId === userId;
         const isCreator = parentTask.creatorId === userId;
-        
+
         let isTeamOwner = false;
         if (parentTask.teamId) {
             const team = await prisma.team.findUnique({ where: { id: parentTask.teamId } });
             if (team && team.ownerId === userId) isTeamOwner = true;
         }
-        
+
         if (!isAssignee && !isCreator && !isTeamOwner) {
             return res.status(403).json({ success: false, message: 'Unauthorized to update this subtask' });
         }
-        
+
         const { title, description, status, priority, assigneeId, dueDate } = req.body;
-        
+
         // Check if assignee exists and is part of the team
         if (assigneeId) {
             if (parentTask.teamId) {
@@ -517,7 +491,7 @@ exports.updateSubTask = async (req, res) => {
                 // For personal tasks, allow assigning to anyone
             }
         }
-        
+
         // Handle status changes and completion tracking
         const updateData = {};
         if (title !== undefined) updateData.title = title;
@@ -526,7 +500,7 @@ exports.updateSubTask = async (req, res) => {
         if (priority !== undefined) updateData.priority = priority;
         if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
         if (dueDate !== undefined) updateData.dueDate = dueDate ? new Date(dueDate) : null;
-        
+
         // If status is COMPLETED, set completedAt
         if (status === 'COMPLETED') {
             updateData.completedAt = new Date();
@@ -534,7 +508,7 @@ exports.updateSubTask = async (req, res) => {
             // If changing from COMPLETED to another status, clear completedAt
             updateData.completedAt = null;
         }
-        
+
         const updatedSubTask = await prisma.subTask.update({
             where: { id: subTaskId },
             data: updateData,
@@ -542,7 +516,7 @@ exports.updateSubTask = async (req, res) => {
                 assignee: { select: { id: true, name: true, email: true, avatar: true } }
             }
         });
-        
+
         res.status(200).json({ success: true, subTask: updatedSubTask });
     } catch (error) {
         console.error('Update subtask error:', error);
@@ -555,35 +529,35 @@ exports.deleteSubTask = async (req, res) => {
         const subTaskId = req.params.subTaskId;
         const taskId = req.params.taskId;
         const userId = req.user.id;
-        
+
         // Check if user has access to the parent task
-        const parentTask = await checkTaskAccess(taskId, userId);
+        const parentTask = await accessService.checkTaskAccess(taskId, userId);
         if (!parentTask) {
             return res.status(404).json({ success: false, message: 'Parent task not found or access denied' });
         }
-        
+
         // Check if the subtask belongs to the parent task
         const existingSubTask = await prisma.subTask.findUnique({ where: { id: subTaskId } });
-        
+
         if (!existingSubTask || existingSubTask.taskId !== taskId) {
             return res.status(404).json({ success: false, message: 'Subtask not found' });
         }
-        
+
         // Only creator of parent task or team owner can delete subtasks
         const isCreator = parentTask.creatorId === userId;
-        
+
         let isTeamOwner = false;
         if (parentTask.teamId) {
             const team = await prisma.team.findUnique({ where: { id: parentTask.teamId } });
             if (team && team.ownerId === userId) isTeamOwner = true;
         }
-        
+
         if (!isCreator && !isTeamOwner) {
             return res.status(403).json({ success: false, message: 'Unauthorized to delete this subtask' });
         }
-        
+
         await prisma.subTask.delete({ where: { id: subTaskId } });
-        
+
         res.status(200).json({ success: true, message: 'Subtask deleted successfully' });
     } catch (error) {
         console.error('Delete subtask error:', error);

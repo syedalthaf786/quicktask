@@ -13,37 +13,65 @@ const AttachmentManager = ({ taskId, attachments = [], onUpdate, readOnly = fals
         e.preventDefault();
         if (!newUrl || !newFileName) return;
 
-        setIsUploading(true);
+        // Optimistic update - add to UI immediately
+        const optimisticAttachment = {
+            id: 'temp-' + Date.now(),
+            fileName: newFileName,
+            url: newUrl,
+            fileType: newFileName.split('.').pop().toUpperCase() || 'FILE',
+            fileSize: 1024,
+            createdAt: new Date().toISOString()
+        };
+        
+        // Update UI optimistically
+        if (onUpdate) {
+            onUpdate([...attachments, optimisticAttachment]);
+        }
+        
+        toast.success('Attachment added');
+        setNewUrl('');
+        setNewFileName('');
+        
         try {
-            // Simulate file type detection or basic logic
-            const fileType = newFileName.split('.').pop().toUpperCase() || 'FILE';
-
             await taskService.addAttachment(taskId, {
-                fileName: newFileName,
-                url: newUrl,
-                fileType,
-                fileSize: 1024 // Dummy size
+                fileName: optimisticAttachment.fileName,
+                url: optimisticAttachment.url,
+                fileType: optimisticAttachment.fileType,
+                fileSize: optimisticAttachment.fileSize
             });
-
-            toast.success('Attachment added');
-            setNewUrl('');
-            setNewFileName('');
+            
+            // Refresh with real data
             if (onUpdate) onUpdate();
         } catch (error) {
+            // Revert on error
             toast.error('Failed to add attachment');
-        } finally {
-            setIsUploading(false);
+            if (onUpdate) {
+                onUpdate(attachments); // Revert to original
+            }
         }
     };
 
     const handleDelete = async (attId) => {
         if (!window.confirm('Delete this attachment?')) return;
+        
+        // Optimistic update - remove from UI immediately
+        const attachmentToDelete = attachments.find(att => att.id === attId);
+        const updatedAttachments = attachments.filter(att => att.id !== attId);
+        
+        if (onUpdate) {
+            onUpdate(updatedAttachments);
+        }
+        
+        toast.success('Attachment deleted');
+        
         try {
             await taskService.deleteAttachment(taskId, attId);
-            toast.success('Attachment deleted');
-            if (onUpdate) onUpdate();
         } catch (error) {
+            // Revert on error
             toast.error('Failed to delete attachment');
+            if (onUpdate && attachmentToDelete) {
+                onUpdate([...updatedAttachments, attachmentToDelete]);
+            }
         }
     };
 

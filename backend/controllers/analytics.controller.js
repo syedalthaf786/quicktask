@@ -66,7 +66,34 @@ exports.getStats = async (req, res) => {
 };
 
 exports.getProductivity = async (req, res) => {
-    // ... Implement logic similar to original file ...
-    // For brevity in this turn, sending basic response
-    res.status(200).json({ success: true, analysis: { message: "Not fully implemented in migration yet" } });
+    try {
+        // Feature flag: this endpoint is not fully implemented yet
+        const isImplemented = false;
+
+        if (!isImplemented) {
+            return res.status(200).json({
+                success: true,
+                implemented: false,
+                message: 'Productivity analytics feature is coming soon',
+                analysis: {}
+            });
+        }
+
+        // TODO: Implement full productivity analysis logic
+        // Calculate completion trends, velocity, burndown, etc.
+
+        res.status(200).json({
+            success: true,
+            implemented: true,
+            analysis: {
+                // productivity data here
+            }
+        });
+    } catch (error) {
+        console.error('Get productivity error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error'
+        });
+    }
 };

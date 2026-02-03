@@ -1,8 +1,9 @@
 
 const express = require('express');
 const router = express.Router();
-const { body } = require('express-validator');
+const { body, validationResult } = require('express-validator');
 const { protect } = require('../middleware/auth');
+const prisma = require('../lib/prisma');
 const taskController = require('../controllers/task.controller');
 const bugController = require('../controllers/bug.controller');
 const attachmentController = require('../controllers/attachment.controller');
@@ -51,21 +52,89 @@ router.put('/bugs/:id', bugController.updateBugReport);
 router.delete('/bugs/:id', bugController.deleteBugReport);
 
 // Submissions
-router.post('/:id/submissions', async (req, res) => {
+router.post('/:id/submissions', [
+    body('content').trim().notEmpty().withMessage('Submission content is required')
+        .isLength({ max: 5000 }).withMessage('Content cannot exceed 5000 characters'),
+    body('fileUrls').optional().isArray().withMessage('File URLs must be an array'),
+    body('feedback').optional().isLength({ max: 1000 }).withMessage('Feedback cannot exceed 1000 characters')
+], async (req, res) => {
     try {
+        // Validate request
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                errors: errors.array()
+            });
+        }
+
+        const taskId = req.params.id;
+        const userId = req.user.id;
+
+        // Check if task exists and user has access
+        const task = await prisma.task.findUnique({
+            where: { id: taskId },
+            include: { team: true }
+        });
+
+        if (!task) {
+            return res.status(404).json({
+                success: false,
+                message: 'Task not found'
+            });
+        }
+
+        // Verify user has access to submit (assignee or team member)
+        let hasAccess = false;
+        if (task.assigneeId === userId || task.creatorId === userId) {
+            hasAccess = true;
+        } else if (task.teamId) {
+            const membership = await prisma.teamMember.findUnique({
+                where: {
+                    teamId_userId: {
+                        teamId: task.teamId,
+                        userId: userId
+                    }
+                }
+            });
+            hasAccess = !!membership;
+        }
+
+        if (!hasAccess) {
+            return res.status(403).json({
+                success: false,
+                message: 'You do not have permission to submit to this task'
+            });
+        }
+
         const { content, fileUrls, feedback } = req.body;
-        const sub = await prisma.submission.create({
+
+        const submission = await prisma.submission.create({
             data: {
-                taskId: req.params.id,
-                userId: req.user.id,
+                taskId: taskId,
+                userId: userId,
                 content,
                 fileUrls: fileUrls || [],
-                feedback
+                feedback: feedback || null
+            },
+            include: {
+                user: {
+                    select: { id: true, name: true, email: true, avatar: true }
+                }
             }
         });
-        res.status(201).json({ success: true, submission: sub });
+
+        res.status(201).json({
+            success: true,
+            message: 'Submission created successfully',
+            submission
+        });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        console.error('Create submission error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error while creating submission'
+        });
     }
 });
 

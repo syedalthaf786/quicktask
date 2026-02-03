@@ -35,6 +35,12 @@ export const taskService = {
         return response.data;
     },
 
+    // Update task progress (for checkboxes)
+    updateTaskProgress: async (id, progress) => {
+        const response = await api.put(`/tasks/${id}`, { progress });
+        return response.data;
+    },
+
     // Update specialized category data (Dev, QA, etc.)
     updateSpecializedData: async (id, category, data) => {
         const endpointMap = {
@@ -65,10 +71,13 @@ export const taskService = {
 
     // Get productivity
     getProductivity: async () => {
-        const response = await api.get('/analytics/productivity');
+        const response = await api.get('/stats/productivity');
         return response.data;
     },
 
+    // NOTE: Comment endpoints are not yet implemented in backend
+    // Temporarily disabled until backend routes are added
+    /*
     // Add comment to task
     addComment: async (taskId, content) => {
         const response = await api.post(`/tasks/${taskId}/comments`, { content });
@@ -80,6 +89,7 @@ export const taskService = {
         const response = await api.delete(`/tasks/${taskId}/comments/${commentId}`);
         return response.data;
     },
+    */
 
     // Add attachment
     addAttachment: async (taskId, attachmentData) => {
@@ -123,12 +133,12 @@ export const taskService = {
     // Bug Report methods
     getBugReports: async (filters = {}) => {
         const params = new URLSearchParams();
-        
+
         if (filters.taskId) params.append('taskId', filters.taskId);
         if (filters.status && filters.status !== 'all') params.append('status', filters.status);
         if (filters.severity && filters.severity !== 'all') params.append('severity', filters.severity);
         if (filters.search) params.append('search', filters.search);
-        
+
         const response = await api.get(`/tasks/bugs?${params.toString()}`);
         return response.data;
     },
@@ -151,5 +161,5 @@ export const taskService = {
     deleteBugReport: async (bugId) => {
         const response = await api.delete(`/tasks/bugs/${bugId}`);
         return response.data;
-    }
+    },
 };

@@ -53,11 +53,11 @@ const sampleTasks = [
 // Users
 const users = [
     { name: 'Demo User', email: 'demo@quicktask.com', password: 'password123' },
-    { name: 'Omesh', email: 'omesha92020@gmail.com', password: 'omesh123' },
-    { name: 'akhila', email: 'vadlaakhila122@gmail.com', password: 'akhila123' },
-    { name: 'manideep', email: 'msai6027@gmail.com', password: 'mani123' },
-    { name: 'Devi', email: 'devimeher2930@gmail.com', password: 'devi123' },
-    { name: 'pavan', email: 'pavanmirudoddi46@gmail.com', password: 'pavan123' }
+    { name: 'Alice Johnson', email: 'alice.johnson@example.com', password: 'alice123' },
+    { name: 'Bob Smith', email: 'bob.smith@example.com', password: 'bob123' },
+    { name: 'Charlie Brown', email: 'charlie.brown@example.com', password: 'charlie123' },
+    { name: 'Diana Prince', email: 'diana.prince@example.com', password: 'diana123' },
+    { name: 'Eve Davis', email: 'eve.davis@example.com', password: 'eve123' }
 ];
 
 const seedDatabase = async () => {
@@ -91,11 +91,11 @@ const seedDatabase = async () => {
         console.log(`👤 Created ${createdUsers.length} users`);
 
         const demoUser = createdUsers.find(u => u.email === 'demo@quicktask.com');
-        const omeshUser = createdUsers.find(u => u.email === 'omesha92020@gmail.com');
-        const akhilaUser = createdUsers.find(u => u.email === 'vadlaakhila122@gmail.com');
-        const manideepUser = createdUsers.find(u => u.email === 'msai6027@gmail.com');
-        const deviUser = createdUsers.find(u => u.email === 'devimeher2930@gmail.com');
-        const pavanUser = createdUsers.find(u => u.email === 'pavanmirudoddi46@gmail.com');
+        const aliceUser = createdUsers.find(u => u.email === 'alice.johnson@example.com');
+        const bobUser = createdUsers.find(u => u.email === 'bob.smith@example.com');
+        const charlieUser = createdUsers.find(u => u.email === 'charlie.brown@example.com');
+        const dianaUser = createdUsers.find(u => u.email === 'diana.prince@example.com');
+        const eveUser = createdUsers.find(u => u.email === 'eve.davis@example.com');
 
         // Create a sample team
         console.log('🏢 Creating sample team...');
@@ -107,11 +107,11 @@ const seedDatabase = async () => {
                 members: {
                     create: [
                         { userId: demoUser.id, role: 'OWNER' },
-                        { userId: omeshUser.id, role: 'MEMBER' },
-                        { userId: akhilaUser.id, role: 'MEMBER' },
-                        { userId: manideepUser.id, role: 'MEMBER' },
-                        { userId: deviUser.id, role: 'ADMIN' },
-                        { userId: pavanUser.id, role: 'MEMBER' }
+                        { userId: aliceUser.id, role: 'MEMBER' },
+                        { userId: bobUser.id, role: 'MEMBER' },
+                        { userId: charlieUser.id, role: 'MEMBER' },
+                        { userId: dianaUser.id, role: 'ADMIN' },
+                        { userId: eveUser.id, role: 'MEMBER' }
                     ]
                 }
             }
@@ -136,7 +136,7 @@ const seedDatabase = async () => {
                 status: 'IN_PROGRESS',
                 dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
                 teamId: team.id,
-                assigneeId: omeshUser.id,
+                assigneeId: aliceUser.id,
                 creatorId: demoUser.id
             },
             {
@@ -146,7 +146,7 @@ const seedDatabase = async () => {
                 status: 'TODO',
                 dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
                 teamId: team.id,
-                assigneeId: manideepUser.id,
+                assigneeId: charlieUser.id,
                 creatorId: demoUser.id
             },
             {
@@ -156,7 +156,7 @@ const seedDatabase = async () => {
                 status: 'IN_PROGRESS',
                 dueDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
                 teamId: team.id,
-                assigneeId: akhilaUser.id,
+                assigneeId: bobUser.id,
                 creatorId: demoUser.id
             },
             {
@@ -166,7 +166,7 @@ const seedDatabase = async () => {
                 status: 'TODO',
                 dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
                 teamId: team.id,
-                assigneeId: pavanUser.id,
+                assigneeId: eveUser.id,
                 creatorId: demoUser.id
             },
             {
@@ -177,7 +177,7 @@ const seedDatabase = async () => {
                 dueDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
                 completedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
                 teamId: team.id,
-                assigneeId: deviUser.id,
+                assigneeId: dianaUser.id,
                 creatorId: demoUser.id
             },
             {
@@ -187,7 +187,7 @@ const seedDatabase = async () => {
                 status: 'TODO',
                 dueDate: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
                 teamId: team.id,
-                assigneeId: omeshUser.id,
+                assigneeId: aliceUser.id,
                 creatorId: demoUser.id
             }
         ];
@@ -202,8 +202,8 @@ const seedDatabase = async () => {
         console.log('Email: demo@quicktask.com');
         console.log('Password: password123');
         console.log('\n👤 Team Member Login:');
-        console.log('Email: omesha92020@gmail.com');
-        console.log('Password: omesh123\n');
+        console.log('Email: alice.johnson@example.com');
+        console.log('Password: alice123\n');
 
     } catch (error) {
         console.error('❌ Seeding error:', error);

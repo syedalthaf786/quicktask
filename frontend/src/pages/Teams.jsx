@@ -22,6 +22,8 @@ const Teams = () => {
     const navigate = useNavigate();
     const [teams, setTeams] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [isCreating, setIsCreating] = useState(false);
+    const [isInviting, setIsInviting] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [showInviteModal, setShowInviteModal] = useState(false);
     const [selectedTeam, setSelectedTeam] = useState(null);
@@ -54,39 +56,66 @@ const Teams = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
 
+        if (isCreating) return;
+
+        setIsCreating(true);
+
         try {
             await teamService.createTeam(formData);
-            toast.success('Team created successfully');
+
+            // Success - show toast, close modal, refresh data
+            toast.success('Team created successfully!');
             closeModal();
             fetchTeams();
         } catch (error) {
+            // Keep modal open on error
             toast.error(error.response?.data?.message || 'Failed to create team');
+            console.error('Create team error:', error);
+        } finally {
+            setIsCreating(false);
         }
     };
 
     const handleDeleteTeam = async (teamId) => {
         if (!window.confirm('Are you sure you want to delete this team? All tasks will be deleted.')) return;
 
+        // Optimistic update - remove from UI immediately
+        const teamToDelete = teams.find(t => t.id === teamId);
+        setTeams(prev => prev.filter(t => t.id !== teamId));
+        toast.success('Team deleted successfully');
+
         try {
             await teamService.deleteTeam(teamId);
-            toast.success('Team deleted successfully');
-            fetchTeams();
         } catch (error) {
+            // Revert on error
             toast.error(error.response?.data?.message || 'Failed to delete team');
+            if (teamToDelete) {
+                setTeams(prev => [...prev, teamToDelete]);
+            }
         }
     };
 
     const handleInviteMember = async (e) => {
         e.preventDefault();
 
+        if (isInviting) return;
+
+        setIsInviting(true);
+
         try {
             await teamService.addMember(selectedTeam.id, inviteData.email, inviteData.role);
+
+            // Success - show toast, close modal, refresh
             toast.success('Member added successfully');
             setShowInviteModal(false);
             setInviteData({ email: '', role: 'MEMBER' });
             fetchTeams();
         } catch (error) {
+            // Keep modal open on error
             toast.error(error.response?.data?.message || 'Failed to add member');
+            console.error('Add member error:', error);
+        } finally {
+            setIsInviting(false);
         }
     };
 
@@ -299,11 +328,16 @@ const Teams = () => {
                                     </div>
 
                                     <div className="modal-actions">
-                                        <button type="button" className="btn btn-outline" onClick={closeModal}>
+                                        <button type="button" className="btn btn-outline" onClick={closeModal} disabled={isCreating}>
                                             Cancel
                                         </button>
-                                        <button type="submit" className="btn btn-primary">
-                                            Create Team
+                                        <button
+                                            type="submit"
+                                            className="btn btn-primary"
+                                            disabled={isCreating}
+                                            style={{ opacity: isCreating ? 0.7 : 1, cursor: isCreating ? 'not-allowed' : 'pointer' }}
+                                        >
+                                            {isCreating ? 'Creating...' : 'Create Team'}
                                         </button>
                                     </div>
                                 </form>
@@ -366,11 +400,16 @@ const Teams = () => {
                                     </div>
 
                                     <div className="modal-actions">
-                                        <button type="button" className="btn btn-outline" onClick={() => setShowInviteModal(false)}>
+                                        <button type="button" className="btn btn-outline" onClick={() => setShowInviteModal(false)} disabled={isInviting}>
                                             Cancel
                                         </button>
-                                        <button type="submit" className="btn btn-primary">
-                                            Send Invite
+                                        <button
+                                            type="submit"
+                                            className="btn btn-primary"
+                                            disabled={isInviting}
+                                            style={{ opacity: isInviting ? 0.7 : 1, cursor: isInviting ? 'not-allowed' : 'pointer' }}
+                                        >
+                                            {isInviting ? 'Adding...' : 'Add Member'}
                                         </button>
                                     </div>
                                 </form>

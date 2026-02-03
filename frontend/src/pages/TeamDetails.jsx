@@ -20,6 +20,7 @@ const TeamDetails = () => {
     const [team, setTeam] = useState(null);
     const [tasks, setTasks] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [isInviting, setIsInviting] = useState(false);
     const [activeTab, setActiveTab] = useState('tasks');
     const [filters, setFilters] = useState({ status: 'all', priority: 'all' });
     const [showMemberModal, setShowMemberModal] = useState(false);
@@ -49,14 +50,9 @@ const TeamDetails = () => {
             if (!teamData?.success) throw new Error(teamData?.message || 'Failed to fetch team');
             if (!tasksData?.success) throw new Error(tasksData?.message || 'Failed to fetch team tasks');
 
-            const isOwner = user?.id === teamData.team?.ownerId;
-            let visibleTasks = tasksData.tasks;
-            if (!isOwner) {
-                visibleTasks = tasksData.tasks.filter(t => t.assigneeId === user?.id);
-            }
-
+            // Trust backend RBAC - no client-side filtering
             setTeam(teamData.team);
-            setTasks(visibleTasks);
+            setTasks(tasksData.tasks);
         } catch (error) {
             console.error('Error fetching team data:', error);
             toast.error(error.message || 'Failed to load team data');
@@ -67,25 +63,50 @@ const TeamDetails = () => {
 
     const handleInviteMember = async (e) => {
         e.preventDefault();
+
+        if (isInviting) return;
+
+        setIsInviting(true);
+
         try {
             await teamService.addMember(team.id, inviteData.email, inviteData.role);
+
+            // Success - show toast, close modal, refresh
             toast.success('Member added successfully');
             setShowMemberModal(false);
             setInviteData({ email: '', role: 'MEMBER' });
             fetchTeamData();
         } catch (error) {
+            // Keep modal open on error
             toast.error(error.response?.data?.message || 'Failed to add member');
+            console.error('Add member error:', error);
+        } finally {
+            setIsInviting(false);
         }
     };
 
     const handleRemoveMember = async (userId) => {
         if (!window.confirm('Are you sure you want to remove this member?')) return;
+
+        // Optimistic update - remove from UI immediately
+        const memberToRemove = team.members.find(m => m.userId === userId);
+        setTeam(prev => ({
+            ...prev,
+            members: prev.members.filter(m => m.userId !== userId)
+        }));
+        toast.success('Member removed successfully');
+
         try {
             await teamService.removeMember(team.id, userId);
-            toast.success('Member removed successfully');
-            fetchTeamData();
         } catch (error) {
+            // Revert on error
             toast.error(error.response?.data?.message || 'Failed to remove member');
+            if (memberToRemove) {
+                setTeam(prev => ({
+                    ...prev,
+                    members: [...prev.members, memberToRemove]
+                }));
+            }
         }
     };
 
@@ -95,12 +116,21 @@ const TeamDetails = () => {
             setPendingStatus(newStatus);
             setShowStatusModal(true);
         } else {
+            // Optimistic update - update UI immediately
+            const previousStatus = task.status;
+            setTasks(prev => prev.map(t =>
+                t.id === task.id ? { ...t, status: newStatus } : t
+            ));
+            toast.success('Task status updated');
+
             try {
                 await taskService.updateTask(task.id, { status: newStatus });
-                toast.success('Task status updated');
-                fetchTeamData();
             } catch (error) {
+                // Revert on error
                 toast.error('Failed to update task status');
+                setTasks(prev => prev.map(t =>
+                    t.id === task.id ? { ...t, status: previousStatus } : t
+                ));
             }
         }
     };
@@ -110,17 +140,29 @@ const TeamDetails = () => {
             toast.error('Please provide a reason');
             return;
         }
+
+        // Optimistic update - update UI immediately
+        const previousStatus = editingTask.status;
+        setTasks(prev => prev.map(t =>
+            t.id === editingTask.id ? { ...t, status: pendingStatus } : t
+        ));
+        toast.success('Task updated');
+
+        // Close modal immediately
+        setShowStatusModal(false);
+        setStatusReason('');
+        setPendingStatus('');
+        setEditingTask(null);
+
         try {
             await taskService.updateTask(editingTask.id, { status: pendingStatus });
             await taskService.addComment(editingTask.id, `Status changed to ${pendingStatus}. Reason: ${statusReason}`);
-            toast.success('Task updated');
-            setShowStatusModal(false);
-            setStatusReason('');
-            setPendingStatus('');
-            setEditingTask(null);
-            fetchTeamData();
         } catch (error) {
+            // Revert on error
             toast.error('Failed to update task');
+            setTasks(prev => prev.map(t =>
+                t.id === editingTask.id ? { ...t, status: previousStatus } : t
+            ));
         }
     };
 
@@ -184,15 +226,16 @@ const TeamDetails = () => {
                         <div className="tasks-filters">
                             <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} className="filter-select">
                                 <option value="all">All Status</option>
-                                <option value="Todo">Todo</option>
-                                <option value="In Progress">In Progress</option>
-                                <option value="Completed">Completed</option>
+                                <option value="TODO">Todo</option>
+                                <option value="IN_PROGRESS">In Progress</option>
+                                <option value="COMPLETED">Completed</option>
+                                <option value="BLOCKED">Blocked</option>
                             </select>
                             <select value={filters.priority} onChange={(e) => setFilters({ ...filters, priority: e.target.value })} className="filter-select">
                                 <option value="all">All Priority</option>
-                                <option value="Low">Low</option>
-                                <option value="Medium">Medium</option>
-                                <option value="High">High</option>
+                                <option value="LOW">Low</option>
+                                <option value="MEDIUM">Medium</option>
+                                <option value="HIGH">High</option>
                             </select>
                         </div>
 
@@ -223,12 +266,17 @@ const TeamDetails = () => {
                                                     {dueDateStatus === 'overdue' && <AlertCircle size={14} />}
                                                 </div>
                                             </div>
-                                            {task.status === 'COMPLETED' && (
-                                                <div className="task-actions" style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                                                    <button className="btn btn-sm" onClick={() => handleTaskStatusChange(task, 'IN_PROGRESS')} title="Mark as In Progress"><Clock size={14} /> In Progress</button>
+                                            <div className="task-actions" style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                                                {task.status !== 'TODO' && (
                                                     <button className="btn btn-sm" onClick={() => handleTaskStatusChange(task, 'TODO')} title="Mark as Todo"><AlertCircle size={14} /> Todo</button>
-                                                </div>
-                                            )}
+                                                )}
+                                                {task.status !== 'IN_PROGRESS' && (
+                                                    <button className="btn btn-sm" onClick={() => handleTaskStatusChange(task, 'IN_PROGRESS')} title="Mark as In Progress"><Clock size={14} /> In Progress</button>
+                                                )}
+                                                {task.status !== 'COMPLETED' && (
+                                                    <button className="btn btn-sm btn-primary" onClick={() => handleTaskStatusChange(task, 'COMPLETED')} title="Mark as Completed">✓ Complete</button>
+                                                )}
+                                            </div>
                                             {task.assignee && (
                                                 <div className="task-assignee">
                                                     <div className="assignee-avatar">{task.assignee.name.charAt(0).toUpperCase()}</div>
@@ -283,8 +331,15 @@ const TeamDetails = () => {
                                     </select>
                                 </div>
                                 <div className="modal-actions">
-                                    <button type="button" className="btn btn-outline" onClick={() => setShowMemberModal(false)}>Cancel</button>
-                                    <button type="submit" className="btn btn-primary">Send Invite</button>
+                                    <button type="button" className="btn btn-outline" onClick={() => setShowMemberModal(false)} disabled={isInviting}>Cancel</button>
+                                    <button
+                                        type="submit"
+                                        className="btn btn-primary"
+                                        disabled={isInviting}
+                                        style={{ opacity: isInviting ? 0.7 : 1, cursor: isInviting ? 'not-allowed' : 'pointer' }}
+                                    >
+                                        {isInviting ? 'Adding...' : 'Add Member'}
+                                    </button>
                                 </div>
                             </form>
                         </div>

@@ -14,10 +14,30 @@ const app = express();
 
 // Middleware
 app.use(helmet()); // Security headers
-app.use(cors({
-    origin: process.env.CORS_ORIGIN || '*',
-    credentials: true
-})); // Enable CORS
+
+// CORS configuration with dynamic origin validation
+const corsOptions = {
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or Postman)
+        if (!origin) return callback(null, true);
+
+        // Parse allowed origins from env var (comma-separated) or use default for development
+        const allowedOrigins = process.env.CORS_ORIGIN
+            ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+            : ['http://localhost:5173', 'http://localhost:3000'];
+
+        if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+            callback(null, true);
+        } else {
+            callback(new Error(`Origin ${origin} not allowed by CORS`));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions)); // Enable CORS
 app.use(compression()); // Compress responses
 app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
@@ -78,7 +98,7 @@ const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
     console.log(`🚀 QuickTask Backend Server running on port ${PORT}`);
     console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🌐 API URL: https://quicktask-backend-ro57.onrender.com`);
+    console.log(`🌐 API URL: ${process.env.API_URL || `http://localhost:${PORT}`}`);
 });
 
 // Graceful shutdown

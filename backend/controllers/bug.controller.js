@@ -1,64 +1,6 @@
 const prisma = require('../lib/prisma');
 const { validationResult } = require('express-validator');
-
-// Helper access check for bug reports
-async function checkBugAccess(bugId, userId) {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return null;
-    
-    const bug = await prisma.bugReport.findUnique({ 
-        where: { id: bugId },
-        include: { task: true }
-    });
-
-    if (!bug) return null;
-
-    // Check if user is the reporter, assignee, or has access to the parent task
-    if (bug.reporterId === userId || bug.assigneeId === userId) return bug;
-    
-    // Check task access (reuse existing task access logic)
-    const taskAccess = await checkTaskAccess(bug.taskId, userId);
-    if (taskAccess) return bug;
-
-    // Check team membership through the task
-    if (bug.task.teamId) {
-        const member = await prisma.teamMember.findUnique({
-            where: { teamId_userId: { teamId: bug.task.teamId, userId } }
-        });
-        if (member) return bug;
-    }
-
-    return null;
-}
-
-// Import task access helper
-async function checkTaskAccess(taskId, userId) {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) return null;
-    const task = await prisma.task.findUnique({ where: { id: taskId } });
-
-    if (!task) return null;
-
-    // Check if user is the team owner of the task's team
-    let isTeamOwner = false;
-    if (task.teamId) {
-        const team = await prisma.team.findUnique({ where: { id: task.teamId } });
-        if (team && team.ownerId === userId) isTeamOwner = true;
-    }
-
-    if (isTeamOwner) return task;
-    if (task.creatorId === userId || task.assigneeId === userId) return task;
-
-    // Check team membership
-    if (task.teamId) {
-        const member = await prisma.teamMember.findUnique({
-            where: { teamId_userId: { teamId: task.teamId, userId } }
-        });
-        if (member) return task;
-    }
-
-    return null;
-}
+const accessService = require('../services/access.service');
 
 exports.getBugReports = async (req, res) => {
     try {
@@ -70,7 +12,7 @@ exports.getBugReports = async (req, res) => {
         // Filter by task if specified
         if (taskId) {
             // Check if user has access to this task
-            const taskAccess = await checkTaskAccess(taskId, userId);
+            const taskAccess = await accessService.checkTaskAccess(taskId, userId);
             if (!taskAccess) {
                 return res.status(404).json({ success: false, message: 'Task not found or access denied' });
             }
@@ -87,7 +29,7 @@ exports.getBugReports = async (req, res) => {
                 },
                 select: { id: true }
             });
-            
+
             const taskIds = accessibleTasks.map(t => t.id);
             where.taskId = { in: taskIds };
         }
@@ -117,7 +59,7 @@ exports.getBugReportById = async (req, res) => {
     try {
         const bugId = req.params.id;
         const userId = req.user.id;
-        
+
         const bug = await checkBugAccess(bugId, userId);
         if (!bug) {
             return res.status(404).json({ success: false, message: 'Bug report not found or access denied' });
@@ -150,7 +92,7 @@ exports.createBugReport = async (req, res) => {
         const userId = req.user.id;
 
         // Check if user has access to the task
-        const taskAccess = await checkTaskAccess(taskId, userId);
+        const taskAccess = await accessService.checkTaskAccess(taskId, userId);
         if (!taskAccess) {
             return res.status(404).json({ success: false, message: 'Task not found or access denied' });
         }
@@ -201,7 +143,7 @@ exports.updateBugReport = async (req, res) => {
     try {
         const bugId = req.params.id;
         const userId = req.user.id;
-        
+
         const bug = await checkBugAccess(bugId, userId);
         if (!bug) {
             return res.status(404).json({ success: false, message: 'Bug report not found or access denied' });
@@ -258,7 +200,7 @@ exports.deleteBugReport = async (req, res) => {
     try {
         const bugId = req.params.id;
         const userId = req.user.id;
-        
+
         const bug = await checkBugAccess(bugId, userId);
         if (!bug) {
             return res.status(404).json({ success: false, message: 'Bug report not found or access denied' });
@@ -266,18 +208,18 @@ exports.deleteBugReport = async (req, res) => {
 
         // Only reporter or task creator/team owner can delete
         const isReporter = bug.reporterId === userId;
-        const taskAccess = await checkTaskAccess(bug.taskId, userId);
-        const isTaskOwner = taskAccess && (taskAccess.creatorId === userId || 
-                          (taskAccess.teamId && (await prisma.team.findUnique({ 
-                              where: { id: taskAccess.teamId } 
-                          })).ownerId === userId));
+        const taskAccess = await accessService.checkTaskAccess(bug.taskId, userId);
+        const isTaskOwner = taskAccess && (taskAccess.creatorId === userId ||
+            (taskAccess.teamId && (await prisma.team.findUnique({
+                where: { id: taskAccess.teamId }
+            })).ownerId === userId));
 
         if (!isReporter && !isTaskOwner) {
             return res.status(403).json({ success: false, message: 'Unauthorized to delete this bug report' });
         }
 
         await prisma.bugReport.delete({ where: { id: bugId } });
-        
+
         res.status(200).json({ success: true, message: 'Bug report deleted successfully' });
     } catch (error) {
         console.error('Delete bug report error:', error);

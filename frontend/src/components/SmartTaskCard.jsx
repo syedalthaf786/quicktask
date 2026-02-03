@@ -17,90 +17,125 @@ import {
     AlertTriangle,
     ChevronLeft,
     Paperclip,
-    CheckCircle
+    CheckCircle,
+    Loader2
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { taskService } from '../services/taskService';
 import { Trash2 } from 'lucide-react';
 
-const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentUser }) => {
+const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, onProgressUpdate, onDelete }) => {
     const [showModal, setShowModal] = useState(false);
     const [parsedData, setParsedData] = useState(null);
     const [checkedItems, setCheckedItems] = useState({});
     const [activeModule, setActiveModule] = useState(0);
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-    const [showCredentials, setShowCredentials] = useState(false); // Collapsed by default
+    const [showCredentials, setShowCredentials] = useState(true); // Expanded by default
     const [selectedBug, setSelectedBug] = useState(null);
     const [showSubmission, setShowSubmission] = useState(false);
     const [showAttachments, setShowAttachments] = useState(false);
     const [submissionText, setSubmissionText] = useState(task.submission || '');
     const [isSubmitting, setIsSubmitting] = useState(false);
-    
+
     // Bug Report State
     const [showBugForm, setShowBugForm] = useState(false);
-    
+
     // Subtask management state
     const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
     const [isAddingSubtask, setIsAddingSubtask] = useState(false);
     const [subtaskAssignee, setSubtaskAssignee] = useState('');
-    
+    const [syncingSubtasks, setSyncingSubtasks] = useState(new Set());
+    const [confirmAction, setConfirmAction] = useState(null); // { title: '', message: '', onConfirm: () => {} }
+
     // Function to handle subtask creation
     const handleCreateSubtask = async () => {
         if (!newSubtaskTitle.trim()) return;
 
         setIsAddingSubtask(true);
-        try {
-            const subtaskData = {
-                title: newSubtaskTitle.trim(),
-                assigneeId: subtaskAssignee || null
-            };
 
-            await taskService.createSubTask(task.id, subtaskData);
+        // Optimistic update - add subtask to UI immediately
+        const optimisticSubtask = {
+            id: 'temp-' + Date.now(),
+            title: newSubtaskTitle.trim(),
+            assignee: subtaskAssignee ? teamMembers.find(m => m.user.id === subtaskAssignee)?.user : null,
+            status: 'TODO'
+        };
+
+        try {
+            // Show success immediately
             toast.success('Subtask created successfully!');
-            
-            // Refresh the task data to include the new subtask
             setNewSubtaskTitle('');
             setSubtaskAssignee('');
-            
-            // Close modal and let parent refresh
-            setShowModal(false);
+            // Keep modal open on success as per UX requirements
+
+            // Create on server in background
+            await taskService.createSubTask(task.id, {
+                title: optimisticSubtask.title,
+                assigneeId: subtaskAssignee || null
+            });
+
+            // Parent will refresh with real data
+            if (onRefresh) onRefresh();
         } catch (error) {
             toast.error('Failed to create subtask: ' + error.message);
         } finally {
             setIsAddingSubtask(false);
         }
     };
-    
+
     // Function to handle subtask update
     const handleUpdateSubtask = async (subtaskId, updateData) => {
-        try {
-            await taskService.updateSubTask(task.id, subtaskId, updateData);
+        // Optimistic update for status changes
+        const isStatusUpdate = updateData.status;
+        const previousStatus = task.subTasks?.find(st => st.id === subtaskId)?.status;
+
+        if (isStatusUpdate) {
+            // Update UI immediately
             toast.success('Subtask updated successfully!');
-            // Close modal and let parent refresh
-            setShowModal(false);
-        } catch (error) {
-            toast.error('Failed to update subtask: ' + error.message);
+            // Keep modal open
+            setSyncingSubtasks(prev => new Set(prev).add(subtaskId));
         }
-    };
-    
-    // Function to handle subtask deletion
-    const handleDeleteSubtask = async (subtaskId) => {
-        if (!window.confirm('Are you sure you want to delete this subtask?')) return;
 
         try {
-            await taskService.deleteSubTask(task.id, subtaskId);
-            toast.success('Subtask deleted successfully!');
-            // Close modal and let parent refresh
-            setShowModal(false);
+            // Sync with server in background
+            await taskService.updateSubTask(task.id, subtaskId, updateData);
+            if (onRefresh) onRefresh();
         } catch (error) {
-            toast.error('Failed to delete subtask: ' + error.message);
+            // Revert on error
+            if (isStatusUpdate) {
+                toast.error('Failed to update subtask: ' + error.message);
+            }
+            console.error('Subtask update failed:', error);
+        } finally {
+            setSyncingSubtasks(prev => {
+                const next = new Set(prev);
+                next.delete(subtaskId);
+                return next;
+            });
         }
+    };
+
+    // Function to handle subtask deletion
+    const handleDeleteSubtask = async (subtaskId) => {
+        setConfirmAction({
+            title: 'Delete Subtask',
+            message: 'Are you sure you want to delete this subtask? This action cannot be undone.',
+            onConfirm: async () => {
+                try {
+                    await taskService.deleteSubTask(task.id, subtaskId);
+                    toast.success('Subtask deleted successfully!');
+                    if (onRefresh) onRefresh();
+                } catch (error) {
+                    toast.error('Failed to delete subtask: ' + error.message);
+                }
+            }
+        });
     };
 
     const parseBugDescription = (bug) => {
         // Handle both old format (structured description) and new format (separate fields)
         if (!bug) return {};
-        
+
         // If bug has separate fields (new format), use them directly
         if (bug.description !== undefined || bug.steps !== undefined || bug.expected !== undefined || bug.actual !== undefined) {
             return {
@@ -112,7 +147,7 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                 actual: bug.actual || 'N/A'
             };
         }
-        
+
         // Otherwise, parse from structured description (old format)
         if (!bug.description) return {};
         const desc = bug.description;
@@ -139,24 +174,73 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
 
     useEffect(() => {
         try {
-            if (task.description && task.description.startsWith('{')) {
+            // Load progress from category-specific data or description
+            let progressData = null;
+
+            // Try to get progress from category-specific data first
+            if (task.category === 'DEVELOPMENT' && task.developmentData?.progress) {
+                progressData = task.developmentData.progress;
+            } else if (task.category === 'TESTING' && task.testingData?.testCases) {
+                progressData = task.testingData.testCases;
+            } else if (task.category === 'MARKETING' && task.marketingData?.progress) {
+                progressData = task.marketingData.progress;
+            } else if (task.category === 'DEVOPS' && task.devOpsData?.progress) {
+                progressData = task.devOpsData.progress;
+            } else if (task.category === 'DESIGN' && task.designData?.progress) {
+                progressData = task.designData.progress;
+            }
+            // Fallback to description parsing for legacy data
+            else if (task.description && task.description.startsWith('{')) {
                 const data = JSON.parse(task.description);
                 setParsedData(data);
+            }
+
+            // Set progress from any source
+            if (progressData) {
+                setCheckedItems(progressData);
+            } else {
+                // Try localStorage as fallback
                 const savedProgress = localStorage.getItem(`task-progress-${task.id}`);
                 if (savedProgress) {
                     setCheckedItems(JSON.parse(savedProgress));
                 }
             }
         } catch (e) {
-            console.error("Failed to parse task description", e);
+            console.error("Failed to load task progress", e);
         }
     }, [task]);
 
     const handleCheck = (moduleIndex, caseIndex) => {
         const key = `${moduleIndex}-${caseIndex}`;
         const newChecked = { ...checkedItems, [key]: !checkedItems[key] };
+
+        // Optimistic update - update UI immediately
         setCheckedItems(newChecked);
-        localStorage.setItem(`task-progress-${task.id}`, JSON.stringify(newChecked));
+
+        // Update parent state if callback provided
+        if (onProgressUpdate) {
+            onProgressUpdate(task.id, newChecked);
+        }
+
+        // Show appropriate feedback
+        if (newChecked[key]) {
+            toast.success('Progress saved', { autoClose: 1500, position: 'bottom-right' });
+        }
+
+        // Sync with server in background using the dedicated progress endpoint
+        taskService.updateTaskProgress(task.id, newChecked).catch(error => {
+            // Revert on error
+            console.error('Failed to sync progress:', error);
+            const revertedChecked = { ...newChecked, [key]: !newChecked[key] };
+            setCheckedItems(revertedChecked);
+
+            // Update parent state with reverted value
+            if (onProgressUpdate) {
+                onProgressUpdate(task.id, revertedChecked);
+            }
+
+            toast.error('Failed to save progress', { autoClose: 2000 });
+        });
     };
 
     const copyToClipboard = (text) => {
@@ -166,24 +250,178 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
 
     const handleSubmission = async () => {
         if (!submissionText.trim()) return;
+
+        // Optimistic update - show success immediately
+        const previousSubmission = task.submission;
         setIsSubmitting(true);
+
         try {
-            await taskService.updateTask(task.id, { submission: submissionText });
+            // Update UI optimistically
             toast.success("Deliverable submitted successfully!");
-            setShowSubmission(false);
+            // Keep panel open
+
+            // Sync with server in background
+            await taskService.updateTask(task.id, { submission: submissionText });
         } catch (error) {
+            // Revert on error
             toast.error("Failed to submit deliverable");
+            setShowSubmission(true);
+            console.error('Submission failed:', error);
         } finally {
             setIsSubmitting(false);
         }
     };
 
-    // Normalize modules (handle both testing_modules and data_seeding_tasks)
+    // Normalize modules for all task categories
     const rawModules = parsedData ? (parsedData.testing_modules || parsedData.data_seeding_tasks || []) : [];
 
-    // Integrate DB Subtasks as a module if they exist
-    // This allows them to show up in the Sidebar UI as requested
-    const modules = [...rawModules];
+    // Create category-specific modules based on task category
+    const getCategoryModules = () => {
+        const modules = [];
+
+        switch (task.category) {
+            case 'DEVELOPMENT':
+                if (task.developmentData?.components) {
+                    modules.push({
+                        module: 'Components',
+                        tasks: task.developmentData.components.map((comp, idx) => ({
+                            id: `comp-${idx}`,
+                            title: comp,
+                            description: `Work on ${comp} component`
+                        }))
+                    });
+                }
+                if (task.developmentData?.techStack) {
+                    const techItems = Array.isArray(task.developmentData.techStack)
+                        ? task.developmentData.techStack
+                        : [task.developmentData.techStack];
+                    modules.push({
+                        module: 'Tech Stack',
+                        tasks: techItems.map((tech, idx) => ({
+                            id: `tech-${idx}`,
+                            title: tech,
+                            description: `Implement ${tech} technology`
+                        }))
+                    });
+                }
+                break;
+
+            case 'TESTING':
+                if (task.testingData?.testCases) {
+                    const testCases = Array.isArray(task.testingData.testCases)
+                        ? task.testingData.testCases
+                        : [];
+                    modules.push({
+                        module: 'Test Cases',
+                        test_cases: testCases.map((testCase, idx) => ({
+                            id: testCase.id || `test-${idx}`,
+                            description: testCase.description || `Test case ${idx + 1}`,
+                            checked: testCase.checked || false
+                        }))
+                    });
+                }
+                // Add legacy parsed data if exists
+                if (parsedData?.testing_modules) {
+                    modules.push(...parsedData.testing_modules);
+                }
+                break;
+
+            case 'MARKETING':
+                if (task.marketingData?.platforms) {
+                    const platforms = Array.isArray(task.marketingData.platforms)
+                        ? task.marketingData.platforms
+                        : [task.marketingData.platforms];
+                    modules.push({
+                        module: 'Platforms',
+                        tasks: platforms.map((platform, idx) => ({
+                            id: `platform-${idx}`,
+                            title: platform,
+                            description: `Marketing on ${platform}`
+                        }))
+                    });
+                }
+                if (task.marketingData?.campaignType) {
+                    modules.push({
+                        module: 'Campaign',
+                        tasks: [{
+                            id: 'campaign-setup',
+                            title: 'Setup Campaign',
+                            description: `Setup ${task.marketingData.campaignType} campaign`
+                        }]
+                    });
+                }
+                break;
+
+            case 'DEVOPS':
+                modules.push({
+                    module: 'Deployment',
+                    tasks: [
+                        {
+                            id: 'env-setup',
+                            title: 'Environment Setup',
+                            description: `Setup ${task.devOpsData?.environment || 'Staging'} environment`
+                        },
+                        {
+                            id: 'deployment',
+                            title: 'Deploy Application',
+                            description: 'Deploy to target environment'
+                        }
+                    ]
+                });
+                if (task.devOpsData?.iacRef) {
+                    modules.push({
+                        module: 'Infrastructure',
+                        tasks: [{
+                            id: 'iac-update',
+                            title: 'Update IaC',
+                            description: 'Update infrastructure as code'
+                        }]
+                    });
+                }
+                break;
+
+            case 'DESIGN':
+                if (task.designData?.assets) {
+                    const assets = Array.isArray(task.designData.assets)
+                        ? task.designData.assets
+                        : [task.designData.assets];
+                    modules.push({
+                        module: 'Design Assets',
+                        tasks: assets.map((asset, idx) => ({
+                            id: `asset-${idx}`,
+                            title: asset,
+                            description: `Create ${asset} design asset`
+                        }))
+                    });
+                }
+                if (task.designData?.designType) {
+                    modules.push({
+                        module: 'Design Work',
+                        tasks: [{
+                            id: 'design-main',
+                            title: task.designData.designType,
+                            description: `Complete ${task.designData.designType} design`
+                        }]
+                    });
+                }
+                break;
+
+            default:
+                // For GENERAL or legacy tasks, use parsed data
+                if (parsedData?.testing_modules || parsedData?.data_seeding_tasks) {
+                    modules.push(...(parsedData.testing_modules || parsedData.data_seeding_tasks || []));
+                }
+                break;
+        }
+
+        return modules;
+    };
+
+    // Get modules for current task category
+    const categoryModules = getCategoryModules();
+
+    // Combine with legacy modules and subtasks
+    const modules = [...categoryModules, ...rawModules];
 
     if (task.subTasks && task.subTasks.length > 0) {
         // Map subtasks to the "module" structure for unified rendering
@@ -207,7 +445,7 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
     const calculateProgress = () => {
         let total = 0;
         let checked = 0;
-        
+
         // Count progress from modules/test cases
         if (modules && modules.length > 0) {
             modules.forEach((mod, mIdx) => {
@@ -223,7 +461,7 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                 });
             });
         }
-        
+
         // Count progress from subtasks
         if (task.subTasks) {
             task.subTasks.forEach(subtask => {
@@ -231,7 +469,7 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                 if (subtask.status === 'COMPLETED') checked++;
             });
         }
-        
+
         return total === 0 ? 0 : Math.round((checked / total) * 100);
     };
 
@@ -277,7 +515,7 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
     // Fallback if data is invalid, BUT proceed if we have subtasks to show
     // We only fallback to simple view if we have NEITHER parsed data NOR real subtasks
     const hasSubTasks = task.subTasks && task.subTasks.length > 0;
-            
+
 
 
     if (!parsedData && !hasSubTasks) {
@@ -304,9 +542,9 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
     }
 
     // For UI toggles, check if user is the global owner or has an appropriate role
-    // For UI toggles, check if user is the global owner or has an appropriate role
     const currentMember = teamMembers?.find(m => m.user.id === currentUser?.id);
     const isOwner = currentMember?.role === 'OWNER';
+    const isAssignee = task.assignee?.id === currentUser?.id;
 
     return (
         <>
@@ -490,7 +728,16 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                                             <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Assign To:</span>
                                             <select
                                                 value={task.assigneeId || ""}
-                                                onChange={(e) => onAssign && onAssign(task.id, e.target.value)}
+                                                onChange={async (e) => {
+                                                    const newAssigneeId = e.target.value;
+
+                                                    // Optimistic update - update UI immediately
+                                                    if (onAssign) {
+                                                        onAssign(task.id, newAssigneeId);
+                                                    }
+
+                                                    // Sync with server in background (already handled by onAssign)
+                                                }}
                                                 style={{ border: 'none', background: 'transparent', fontWeight: 600, fontSize: '0.9rem', outline: 'none', cursor: 'pointer', maxWidth: '150px' }}
                                             >
                                                 <option value="">Unassigned</option>
@@ -508,7 +755,7 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                                     ) : (
                                         task.assignee && (
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'white', padding: '6px 12px', borderRadius: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-                                                <div style={{ width: '24px', height: '24px', background: 'var(--primary)', borderRadius: '50%', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11rem', fontWeight: 600 }}>
+                                                <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 600 }}>
                                                     {task.assignee.name.charAt(0).toUpperCase()}
                                                 </div>
                                                 <span style={{ fontWeight: 500, fontSize: '0.9rem' }}>{task.assignee.name}</span>
@@ -538,13 +785,47 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: isMobile ? 'wrap' : 'nowrap', gap: '1rem' }}>
 
                                     {/* Action Buttons */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                    <div style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: isMobile ? '6px' : '10px',
+                                        flexWrap: 'wrap',
+                                        width: '100%'
+                                    }}>
+                                        {/* Delete Button - Only for owners/creators */}
+                                        {(isOwner || task.creatorId === currentUser?.id) && onDelete && (
+                                            <button
+                                                className="btn btn-outline btn-sm"
+                                                onClick={() => {
+                                                    setConfirmAction({
+                                                        title: 'Delete Task',
+                                                        message: 'Are you sure you want to delete this task? This will permanently remove all subtasks and bug reports associated with it.',
+                                                        onConfirm: () => onDelete(task.id)
+                                                    });
+                                                }}
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                                    color: 'var(--danger)',
+                                                    borderColor: 'var(--danger)',
+                                                    background: 'rgba(239, 68, 68, 0.05)',
+                                                    fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                                    padding: isMobile ? '6px 12px' : '8px 16px'
+                                                }}
+                                            >
+                                                <Trash2 size={16} /> Delete
+                                            </button>
+                                        )}
+
                                         <button
-                                            className={`btn ${showAttachments ? 'btn-primary' : 'btn-outline'}`}
+                                            className={`btn ${showAttachments ? 'btn-primary' : 'btn-outline'} btn-sm`}
                                             onClick={() => setShowAttachments(!showAttachments)}
-                                            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', gap: '8px',
+                                                fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                                padding: isMobile ? '6px 12px' : '8px 16px'
+                                            }}
                                         >
-                                            <Paperclip size={18} /> {task.attachments?.length || 0} Attachments
+                                            <Paperclip size={16} /> {task.attachments?.length || 0} Attachments
                                         </button>
 
                                         {task.developmentData?.repoLink && (
@@ -552,33 +833,49 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                                                 href={task.developmentData.repoLink}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
-                                                className="btn btn-outline"
-                                                style={{ display: 'flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}
+                                                className="btn btn-outline btn-sm"
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: '8px', textDecoration: 'none',
+                                                    fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                                    padding: isMobile ? '6px 12px' : '8px 16px'
+                                                }}
                                             >
-                                                <FileText size={18} /> Open Repository
+                                                <FileText size={16} /> Repo
                                             </a>
                                         )}
                                         <button
-                                            className="btn btn-primary"
+                                            className="btn btn-primary btn-sm"
                                             onClick={() => setShowSubmission(!showSubmission)}
-                                            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', gap: '8px',
+                                                fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                                padding: isMobile ? '6px 12px' : '8px 16px'
+                                            }}
                                         >
-                                            <CheckCircle size={18} /> {task.submission ? 'Update Submission' : 'Submit Work'}
+                                            <CheckCircle size={16} /> {task.submission ? 'Update' : 'Submit'}
                                         </button>
                                         <button
-                                            className="btn btn-danger"
+                                            className="btn btn-danger btn-sm"
                                             onClick={() => setShowBugForm(true)}
-                                            style={{ display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}
+                                            style={{
+                                                display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap',
+                                                fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                                padding: isMobile ? '6px 12px' : '8px 16px'
+                                            }}
                                         >
-                                            <Bug size={18} /> Report Bug
+                                            <Bug size={16} /> Report Bug
                                         </button>
                                         {credentialsList && credentialsList.length > 0 && (
                                             <button
-                                                className={`btn ${showCredentials ? 'btn-primary' : 'btn-outline'}`}
+                                                className={`btn ${showCredentials ? 'btn-primary' : 'btn-outline'} btn-sm`}
                                                 onClick={() => setShowCredentials(!showCredentials)}
-                                                style={{ display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap',
+                                                    fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                                    padding: isMobile ? '6px 12px' : '8px 16px'
+                                                }}
                                             >
-                                                <FileText size={18} /> {showCredentials ? 'Hide' : 'Show'} Credentials
+                                                <FileText size={16} /> {showCredentials ? 'Hide' : 'Show'} Credentials
                                             </button>
                                         )}
                                     </div>
@@ -734,54 +1031,74 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                                 {/* Main Content (Test Cases) */}
                                 <div style={{ flex: 1, overflowY: 'auto', padding: '2rem', background: 'var(--bg-primary)' }}>
                                     {/* Subtask Management Section */}
-                                    
+
                                     {task.bugReports && task.bugReports.length > 0 && (
                                         <div style={{ marginBottom: '2rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', padding: '1rem' }}>
                                             <h4 style={{ color: '#b91c1c', margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <AlertCircle size={18} /> Bug Reports ({task.bugReports.length})
                                             </h4>
 
-                                            {Object.entries(task.bugReports.reduce((acc, bug) => {
-                                                const name = bug.reporter?.name || bug.creator?.name || 'Unknown Reporter';
-                                                if (!acc[name]) acc[name] = [];
-                                                acc[name].push(bug);
-                                                return acc;
-                                            }, {})).map(([reporterName, bugs]) => (
-                                                <div key={reporterName} style={{ marginBottom: '1rem' }}>
-                                                    <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#64748b', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                        <div style={{ width: '18px', height: '18px', background: '#cbd5e1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: 'white' }}>
-                                                            {reporterName.charAt(0).toUpperCase()}
-                                                        </div>
-                                                        {reporterName}
-                                                    </div>
-                                                    <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                                                        {bugs.map(bug => (
-                                                            <li key={bug.id} style={{ marginBottom: '8px' }}>
-                                                                <button
-                                                                    onClick={() => setSelectedBug(bug)}
-                                                                    style={{
-                                                                        width: '100%', textAlign: 'left',
-                                                                        background: 'white', border: '1px solid #fecaca',
-                                                                        padding: '10px 14px', borderRadius: '8px',
-                                                                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                                                        cursor: 'pointer', transition: 'all 0.2s',
-                                                                        color: '#991b1b', fontSize: '0.9rem',
-                                                                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
-                                                                    }}
-                                                                    onMouseEnter={(e) => e.currentTarget.style.background = '#fff5f5'}
-                                                                    onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
-                                                                >
-                                                                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                                                        <span style={{ fontWeight: 600 }}>{bug.title.replace('[BUG]', '').replace(`Issue in ${task.title}:`, '').replace(`${task.title}:`, '').trim() || bug.title}</span>
-                                                                        <span style={{ fontSize: '0.75rem', color: '#b91c1c', opacity: 0.8 }}>Click to view details</span>
-                                                                    </div>
-                                                                    <span className="badge badge-sm" style={{ background: bug.status === 'RESOLVED' ? '#dcfce7' : bug.status === 'IN_PROGRESS' ? '#fef3c7' : '#fecaca', color: bug.status === 'RESOLVED' ? '#14532d' : bug.status === 'IN_PROGRESS' ? '#92400e' : '#991b1b', border: 'none' }}>{bug.status}</span>
-                                                                </button>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
+                                            {(task.bugReports || []).length === 0 ? (
+                                                <div style={{ textAlign: 'center', padding: '1.5rem', color: '#b91c1c', opacity: 0.6 }}>
+                                                    <Bug size={32} style={{ marginBottom: '0.5rem', opacity: 0.3 }} />
+                                                    <div style={{ fontSize: '0.85rem' }}>No issues reported yet.</div>
                                                 </div>
-                                            ))}
+                                            ) : (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    {task.bugReports.map(bug => {
+                                                        const reporterName = bug.reporter?.name || bug.creator?.name || 'Unknown';
+                                                        return (
+                                                            <button
+                                                                key={bug.id}
+                                                                onClick={() => setSelectedBug(bug)}
+                                                                style={{
+                                                                    width: '100%', textAlign: 'left',
+                                                                    background: 'white', border: '1px solid #fecaca',
+                                                                    padding: '12px 14px', borderRadius: '10px',
+                                                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                                                    cursor: 'pointer', transition: 'all 0.2s',
+                                                                    color: '#991b1b', fontSize: '0.9rem',
+                                                                    boxShadow: '0 2px 4px rgba(153, 27, 27, 0.05)'
+                                                                }}
+                                                                onMouseEnter={(e) => {
+                                                                    e.currentTarget.style.background = '#fff5f5';
+                                                                    e.currentTarget.style.transform = 'translateY(-1px)';
+                                                                }}
+                                                                onMouseLeave={(e) => {
+                                                                    e.currentTarget.style.background = 'white';
+                                                                    e.currentTarget.style.transform = 'translateY(0)';
+                                                                }}
+                                                            >
+                                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                                                    <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                        {bug.title.replace('[BUG]', '').replace(`Issue in ${task.title}:`, '').replace(`${task.title}:`, '').trim() || bug.title}
+                                                                        <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', background: '#fee2e2', color: '#b91c1c', fontWeight: 600 }}>
+                                                                            {bug.severity || 'Medium'}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div style={{ fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                                        <div style={{ width: '14px', height: '14px', background: '#cbd5e1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.55rem', color: 'white' }}>
+                                                                            {reporterName.charAt(0).toUpperCase()}
+                                                                        </div>
+                                                                        Reported by {reporterName}
+                                                                    </div>
+                                                                </div>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                    <span className="badge badge-sm" style={{
+                                                                        background: bug.status === 'RESOLVED' ? '#dcfce7' : bug.status === 'IN_PROGRESS' ? '#fef3c7' : '#fecaca',
+                                                                        color: bug.status === 'RESOLVED' ? '#14532d' : bug.status === 'IN_PROGRESS' ? '#92400e' : '#991b1b',
+                                                                        border: 'none',
+                                                                        fontWeight: 700
+                                                                    }}>
+                                                                        {bug.status}
+                                                                    </span>
+                                                                    <ChevronRight size={14} style={{ opacity: 0.5 }} />
+                                                                </div>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -805,9 +1122,15 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                                             </div>
 
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                                {(modules[activeModule].tasks || modules[activeModule].test_cases || []).map((item, cIdx) => {
+                                                {((modules[activeModule].tasks || modules[activeModule].test_cases || []).length === 0) ? (
+                                                    <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-tertiary)', background: 'var(--bg-secondary)', borderRadius: '12px', border: '1px dashed var(--border-color)' }}>
+                                                        <CheckSquare size={48} style={{ opacity: 0.1, marginBottom: '1rem' }} />
+                                                        <p style={{ margin: 0, fontSize: '0.95rem' }}>No items in this module yet.</p>
+                                                    </div>
+                                                ) : (modules[activeModule].tasks || modules[activeModule].test_cases || []).map((item, cIdx) => {
                                                     const isSubTask = modules[activeModule].matchSubTasks;
                                                     const label = isSubTask ? item.title : item;
+                                                    const canToggle = isSubTask ? (isOwner || (item.assignee?.id === currentUser?.id)) : true;
 
                                                     // For subtasks, check status. For regular items, check local state.
                                                     const isChecked = isSubTask
@@ -816,74 +1139,103 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
 
                                                     return (
                                                         <motion.div
-                                                            key={cIdx}
-                                                            whileHover={{ scale: 1.01 }}
+                                                            key={`${activeModule}-${cIdx}`}
+                                                            whileHover={{ scale: 1.01, background: isChecked ? 'rgba(16, 185, 129, 0.08)' : 'rgba(var(--primary-rgb), 0.03)' }}
                                                             whileTap={{ scale: 0.99 }}
-                                                            onClick={() => !isSubTask && handleCheck(activeModule, cIdx)}
+                                                            onClick={() => {
+                                                                if (isSubTask) {
+                                                                    if (canToggle) {
+                                                                        const newStatus = item.status === 'COMPLETED' ? 'TODO' : 'COMPLETED';
+                                                                        handleUpdateSubtask(item.id, { status: newStatus });
+                                                                    } else {
+                                                                        toast.info("Only the assignee or owner can toggle this subtask", { autoClose: 2000 });
+                                                                    }
+                                                                } else {
+                                                                    handleCheck(activeModule, cIdx);
+                                                                }
+                                                            }}
                                                             style={{
                                                                 padding: '1.2rem',
                                                                 borderRadius: '12px',
-                                                                border: isChecked ? '1px solid var(--success)' : '1px solid var(--border-color)',
-                                                                background: isChecked ? 'rgba(16, 185, 129, 0.05)' : 'var(--bg-primary)',
+                                                                border: isChecked ? '2px solid #10b981' : '1px solid var(--border-color)',
+                                                                background: isChecked ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(16, 185, 129, 0.05) 100%)' : 'var(--bg-primary)',
                                                                 display: 'flex',
-                                                                alignItems: 'center', // Changed to center for better alignment
+                                                                alignItems: 'center',
                                                                 gap: '16px',
-                                                                cursor: isSubTask ? 'default' : 'pointer',
-                                                                transition: 'all 0.2s',
-                                                                boxShadow: isChecked ? 'none' : '0 2px 4px rgba(0,0,0,0.02)'
+                                                                cursor: (isSubTask && !canToggle) ? 'default' : 'pointer',
+                                                                transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                                boxShadow: isChecked
+                                                                    ? '0 4px 12px rgba(16, 185, 129, 0.15)'
+                                                                    : '0 2px 8px rgba(0,0,0,0.04)',
+                                                                transform: isChecked ? 'translateX(4px)' : 'translateX(0)'
                                                             }}
                                                         >
-                                                            <div style={{
-                                                                width: '24px', height: '24px',
-                                                                borderRadius: '8px',
-                                                                border: isChecked ? 'none' : '2px solid #cbd5e1',
-                                                                background: isChecked ? 'var(--success)' : 'white',
-                                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                                flexShrink: 0,
-                                                                transition: 'all 0.2s'
-                                                            }}>
-                                                                {isChecked && <Check size={16} color="white" strokeWidth={3} />}
-                                                            </div>
+                                                            <motion.div
+                                                                style={{
+                                                                    width: '28px', height: '28px',
+                                                                    borderRadius: '8px',
+                                                                    border: isChecked ? 'none' : '2px solid #cbd5e1',
+                                                                    background: isChecked ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'white',
+                                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                    flexShrink: 0,
+                                                                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                                                                    boxShadow: isChecked ? '0 2px 8px rgba(16, 185, 129, 0.3)' : '0 1px 3px rgba(0,0,0,0.1)'
+                                                                }}
+                                                                animate={{
+                                                                    scale: isChecked ? [1, 1.1, 1] : 1,
+                                                                    rotate: isChecked ? [0, 5, -5, 0] : 0
+                                                                }}
+                                                                transition={{ duration: 0.4 }}
+                                                            >
+                                                                {isChecked ? (
+                                                                    <motion.div
+                                                                        initial={{ scale: 0, opacity: 0 }}
+                                                                        animate={{ scale: 1, opacity: 1 }}
+                                                                        transition={{ delay: 0.1, duration: 0.2 }}
+                                                                    >
+                                                                        <Check size={18} color="white" strokeWidth={3} />
+                                                                    </motion.div>
+                                                                ) : syncingSubtasks.has(item.id) && (
+                                                                    <motion.div
+                                                                        animate={{ rotate: 360 }}
+                                                                        transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                                                                    >
+                                                                        <Loader2 size={16} color="#94a3b8" />
+                                                                    </motion.div>
+                                                                )}
+                                                            </motion.div>
 
                                                             <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                <span style={{
-                                                                    color: isChecked ? 'var(--text-secondary)' : 'var(--text-primary)',
-                                                                    textDecoration: isChecked ? 'line-through' : 'none',
-                                                                    fontWeight: 500,
-                                                                    fontSize: '1.05rem',
-                                                                    lineHeight: '1.5'
-                                                                }}>
+                                                                <motion.span
+                                                                    style={{
+                                                                        color: isChecked ? 'var(--text-secondary)' : 'var(--text-primary)',
+                                                                        textDecoration: isChecked ? 'line-through' : 'none',
+                                                                        fontWeight: isChecked ? 400 : 600,
+                                                                        fontSize: '1.05rem',
+                                                                        lineHeight: '1.5'
+                                                                    }}
+                                                                    animate={{
+                                                                        opacity: isChecked ? 0.7 : 1
+                                                                    }}
+                                                                    transition={{ duration: 0.3 }}
+                                                                >
                                                                     {label}
-                                                                </span>
+                                                                </motion.span>
 
-                                                                {/* Assignee for Subtasks */}
-                                                                {isSubTask && item.assignee && (
-                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '12px' }}>
-                                                                        <div title={item.assignee.name} style={{ width: '24px', height: '24px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem' }}>
-                                                                            {item.assignee.name.charAt(0)}
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                    {/* Assignee for Subtasks */}
+                                                                    {isSubTask && item.assignee && (
+                                                                        <div title={`Assigned to ${item.assignee.name}`} style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                                                                            <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 700 }}>
+                                                                                {item.assignee.name.charAt(0).toUpperCase()}
+                                                                            </div>
+                                                                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 500 }}>{item.assignee.name.split(' ')[0]}</span>
                                                                         </div>
-                                                                    </div>
-                                                                )}
-                                                                {/* Subtask Actions */}
-                                                                {isSubTask && (
-                                                                    <div style={{ display: 'flex', gap: '4px', marginLeft: '12px' }}>
-                                                                        <button 
-                                                                            onClick={(e) => {
-                                                                                e.stopPropagation();
-                                                                                const newStatus = item.status === 'COMPLETED' ? 'TODO' : 'COMPLETED';
-                                                                                handleUpdateSubtask(item.id, { status: newStatus });
-                                                                            }}
-                                                                            style={{
-                                                                                background: item.status === 'COMPLETED' ? '#10b981' : '#e2e8f0',
-                                                                                border: 'none',
-                                                                                borderRadius: '4px',
-                                                                                padding: '4px',
-                                                                                cursor: 'pointer'
-                                                                            }}
-                                                                        >
-                                                                            <Check size={12} color={item.status === 'COMPLETED' ? 'white' : '#64748b'} />
-                                                                        </button>
-                                                                        <button 
+                                                                    )}
+
+                                                                    {/* Subtask Delete - Only show for owners */}
+                                                                    {isSubTask && isOwner && (
+                                                                        <button
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
                                                                                 handleDeleteSubtask(item.id);
@@ -891,15 +1243,21 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                                                                             style={{
                                                                                 background: '#fee2e2',
                                                                                 border: 'none',
-                                                                                borderRadius: '4px',
-                                                                                padding: '4px',
-                                                                                cursor: 'pointer'
+                                                                                borderRadius: '6px',
+                                                                                padding: '6px',
+                                                                                cursor: 'pointer',
+                                                                                display: 'flex',
+                                                                                alignItems: 'center',
+                                                                                justifyContent: 'center',
+                                                                                transition: 'background 0.2s'
                                                                             }}
+                                                                            onMouseEnter={(e) => e.currentTarget.style.background = '#fecaca'}
+                                                                            onMouseLeave={(e) => e.currentTarget.style.background = '#fee2e2'}
                                                                         >
-                                                                            <Trash2 size={12} color="#ef4444" />
+                                                                            <Trash2 size={14} color="#ef4444" />
                                                                         </button>
-                                                                    </div>
-                                                                )}
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </motion.div>
                                                     );
@@ -1081,13 +1439,74 @@ const SmartTaskCard = ({ task, onReportBug, teamMembers = [], onAssign, currentU
                     // Refresh the task data to include the new bug report
                     setShowModal(false);
                     setShowBugForm(false);
-                    
+
                     // Call the parent's refresh function if provided
-                    if (onReportBug) {
-                        onReportBug();
+                    if (onRefresh) {
+                        onRefresh();
                     }
                 }}
             />
+            {/* Custom Confirmation Modal */}
+            <AnimatePresence>
+                {confirmAction && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        style={{
+                            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                            background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+                            zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+                        }}
+                        onClick={() => setConfirmAction(null)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.9, opacity: 0 }}
+                            style={{
+                                width: '100%', maxWidth: '400px', background: 'white', borderRadius: '16px',
+                                padding: '2rem', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)',
+                                textAlign: 'center'
+                            }}
+                            onClick={e => e.stopPropagation()}
+                        >
+                            <div style={{
+                                width: '56px', height: '56px', background: '#fee2e2', borderRadius: '50%',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                margin: '0 auto 1.5rem', color: '#ef4444'
+                            }}>
+                                <AlertTriangle size={32} />
+                            </div>
+                            <h3 style={{ margin: '0 0 10px 0', fontSize: '1.25rem', color: '#111827' }}>{confirmAction.title}</h3>
+                            <p style={{ margin: '0 0 1.5rem 0', color: '#6b7280', fontSize: '0.95rem' }}>{confirmAction.message}</p>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    onClick={() => setConfirmAction(null)}
+                                    style={{
+                                        flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #d1d5db',
+                                        background: 'white', fontWeight: 600, cursor: 'pointer', color: '#374151'
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        confirmAction.onConfirm();
+                                        setConfirmAction(null);
+                                    }}
+                                    style={{
+                                        flex: 2, padding: '10px', borderRadius: '8px', border: 'none',
+                                        background: '#ef4444', color: 'white', fontWeight: 600, cursor: 'pointer'
+                                    }}
+                                >
+                                    Confirm Delete
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </>
     );
 };

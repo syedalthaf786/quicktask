@@ -40,54 +40,58 @@ const BugReportForm = ({ isOpen, onClose, teamId, onSuccess, parentTaskId, paren
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setLoading(true);
+        
+        // Validate required fields
+        if (!formData.title.trim()) {
+            toast.error('Please enter a bug title');
+            return;
+        }
 
+        if (!parentTaskId) {
+            toast.error('Parent task ID is required');
+            return;
+        }
+        
+        // Optimistic update - show success immediately
+        toast.success('Bug reported successfully!');
+        onSuccess && onSuccess();
+        onClose();
+        
+        // Store form data to reset after submission
+        const originalFormData = { ...formData };
+        
+        // Reset form immediately
+        setFormData({
+            title: parentTaskTitle ? `Issue in ${parentTaskTitle}: ` : '',
+            description: '',
+            stepsToReproduce: '',
+            expectedResult: '',
+            actualResult: '',
+            severity: 'Medium',
+            browser: 'Chrome 120',
+            priority: 'MEDIUM',
+        });
+        
         try {
-            // Validate required fields
-            if (!formData.title.trim()) {
-                toast.error('Please enter a bug title');
-                setLoading(false);
-                return;
-            }
-
-            if (!parentTaskId) {
-                toast.error('Parent task ID is required');
-                setLoading(false);
-                return;
-            }
-
             const bugData = {
                 taskId: parentTaskId,
-                title: formData.title,
-                description: formData.description,
-                severity: formData.severity.toUpperCase(),
+                title: originalFormData.title,
+                description: originalFormData.description,
+                severity: originalFormData.severity.toUpperCase(),
                 environment: 'STAGING', // Default environment
-                steps: formData.stepsToReproduce,
-                expected: formData.expectedResult,
-                actual: formData.actualResult,
-                priority: mapSeverityToPriority(formData.severity).toUpperCase()
+                steps: originalFormData.stepsToReproduce,
+                expected: originalFormData.expectedResult,
+                actual: originalFormData.actualResult,
+                priority: mapSeverityToPriority(originalFormData.severity).toUpperCase()
             };
 
             await taskService.createBugReport(bugData);
-            toast.success('Bug reported successfully!');
-            onSuccess && onSuccess();
-            onClose();
-            // Reset form
-            setFormData({
-                title: parentTaskTitle ? `Issue in ${parentTaskTitle}: ` : '',
-                description: '',
-                stepsToReproduce: '',
-                expectedResult: '',
-                actualResult: '',
-                severity: 'Medium',
-                browser: 'Chrome 120',
-                priority: 'MEDIUM',
-            });
         } catch (error) {
+            // Revert on error
             console.error('Error reporting bug:', error);
             toast.error(error.message || 'Failed to report bug');
-        } finally {
-            setLoading(false);
+            // Restore form data
+            setFormData(originalFormData);
         }
     };
 

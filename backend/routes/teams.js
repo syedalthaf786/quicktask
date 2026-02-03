@@ -287,7 +287,7 @@ router.delete('/:id', async (req, res) => {
 
         // Delete team (cascade will delete members and tasks)
         await prisma.team.delete({
-            where: { id: parseInt(req.params.id) }
+            where: { id: req.params.id }
         });
 
         res.status(200).json({

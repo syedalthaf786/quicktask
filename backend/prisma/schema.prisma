@@ -179,6 +179,7 @@ model DevelopmentTask {
   storyUrl    String?
   epic        String?
   sprintId    String?
+  progress    Json?     // Progress tracking for development tasks
 }
 
 model TestingTask {
@@ -200,6 +201,7 @@ model MarketingTask {
   kpis          String?
   phase         CampaignPhase @default(RESEARCH)
   roi           Float?
+  progress      Json?         // Progress tracking for marketing tasks
 }
 
 model DevOpsTask {
@@ -210,6 +212,7 @@ model DevOpsTask {
   riskLevel     String?     @default("Low")
   deploymentUrl String?
   rollbackPlan  String?
+  progress      Json?       // Progress tracking for devops tasks
 }
 
 model DesignTask {
@@ -219,6 +222,7 @@ model DesignTask {
   figmaLink     String?
   assets        String[]
   revisionCount Int      @default(0)
+  progress      Json?    // Progress tracking for design tasks
 }
 
 model Attachment {
