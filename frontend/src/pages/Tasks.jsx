@@ -317,6 +317,7 @@ const Tasks = () => {
                                                 }
                                             }
                                         }}
+                                        onEdit={() => openModal(task)}
                                     />
                                 );
                             }

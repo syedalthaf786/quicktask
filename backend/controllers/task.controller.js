@@ -255,9 +255,10 @@ exports.updateTask = async (req, res) => {
                 if (req.body[field] !== undefined) updateData[field] = req.body[field];
             });
         } else {
-            // Assignees can update status and actualHours
+            // Assignees can update status, actualHours and progress
             if (req.body.status) updateData.status = req.body.status.toUpperCase().replace(' ', '_');
             if (req.body.actualHours) updateData.actualHours = parseFloat(req.body.actualHours);
+            if (req.body.progress !== undefined) updateData.progress = req.body.progress;
         }
 
         if (updateData.status === 'COMPLETED') updateData.completedAt = new Date();
@@ -567,8 +568,9 @@ exports.deleteSubTask = async (req, res) => {
 
 // Sub-controllers for specialized data
 exports.updateCategoryData = async (req, res) => {
-    const { category } = req.params; // 'development', 'design', etc.
-    const taskId = req.params.id;
+    const { category, id: taskId } = req.params;
+    const userId = req.user.id;
+
     const modelMap = {
         development: 'developmentTask',
         testing: 'testingTask',
@@ -581,10 +583,9 @@ exports.updateCategoryData = async (req, res) => {
     if (!modelName) return res.status(400).json({ success: false, message: 'Invalid category endpoint' });
 
     try {
-        // Upsert logic: update if exists, create if not (though create usually happens on task create)
-        // But for migration safety, use upsert or update
-        // Prisma update requires checking existence or catching error if we didn't init it.
-        // Since we init on create, update is fine. 
+        // Access Check
+        const task = await accessService.checkTaskAccess(taskId, userId);
+        if (!task) return res.status(403).json({ success: false, message: 'Unauthorized access to task' });
 
         // Handle array fields properly if they come as strings
         const data = { ...req.body };
@@ -592,13 +593,16 @@ exports.updateCategoryData = async (req, res) => {
         if (data.assets && typeof data.assets === 'string') data.assets = [data.assets];
         if (data.platforms && typeof data.platforms === 'string') data.platforms = [data.platforms];
 
-        const updated = await prisma[modelName].update({
+        // Use upsert to handle migration safety (older tasks without specialized records)
+        const updated = await prisma[modelName].upsert({
             where: { taskId },
-            data
+            update: data,
+            create: { ...data, taskId }
         });
+
         res.status(200).json({ success: true, data: updated });
     } catch (error) {
-        console.error(`Update ${category} error:`, error);
-        res.status(500).json({ success: false, error: error.message });
+        console.error(`Update ${category} error [Task: ${taskId}]:`, error);
+        res.status(500).json({ success: false, message: 'Failed to update specialized task data', error: error.message });
     }
 };

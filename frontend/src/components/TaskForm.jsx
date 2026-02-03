@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Plus, Trash2, Paperclip } from 'lucide-react';
 import { taskService } from '../services/taskService';
 import { toast } from 'react-toastify';
+import { useAuth } from '../context/AuthContext';
 import AttachmentManager from './AttachmentManager';
 import { format } from 'date-fns';
 import './TaskForm.css';
@@ -11,6 +12,13 @@ import './TaskForm.css';
 const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {} }) => {
     const [step, setStep] = useState(task ? 'form' : 'category');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const { user: currentUser } = useAuth();
+
+    // Permission check
+    const isCreator = task?.creatorId === currentUser?.id;
+    const currentMember = teamMembers?.find(m => (m.user?.id || m.id) === currentUser?.id);
+    const isTeamOwner = currentMember?.role === 'OWNER';
+    const canEditAll = !task || isCreator || isTeamOwner;
     const [formData, setFormData] = useState({
         title: '',
         description: '',
@@ -23,9 +31,10 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
         actualHours: '',
         // specialized
         repoLink: '', branchName: '', techStack: '',
-        testType: 'MANUAL', testingEnv: 'STAGING',
+        testType: 'MANUAL',
         campaignType: 'SOCIAL', platform: '',
-        riskLevel: 'LOW', devOpsEnv: 'STAGING',
+        environment: 'STAGING',
+        riskLevel: 'LOW',
         designType: 'UI', figmaLink: '',
         // subtasks
         subTasks: [],
@@ -86,54 +95,67 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
         const isEditing = !!task;
 
         try {
-            const dataToSubmit = {
-                ...formData,
-                // Remove fields that don't exist in the backend schema
-                repoLink: undefined,
-                branchName: undefined,
-                techStack: undefined,
-                testType: undefined,
-                testingEnv: undefined,
-                campaignType: undefined,
-                platform: undefined,
-                riskLevel: undefined,
-                devOpsEnv: undefined,
-                designType: undefined,
-                figmaLink: undefined
-            };
+            // 1. Separate main task data from specialized category data
+            const mainTaskFields = [
+                'title', 'description', 'priority', 'status', 'dueDate',
+                'category', 'assigneeId', 'estimatedHours', 'actualHours'
+            ];
 
-            // Clean up undefined values
-            Object.keys(dataToSubmit).forEach(key => {
-                if (dataToSubmit[key] === undefined) {
-                    delete dataToSubmit[key];
-                }
+            const taskData = {};
+            mainTaskFields.forEach(field => {
+                if (formData[field] !== undefined) taskData[field] = formData[field];
             });
 
+            // 2. Extract specialized data based on category
+            const categoryData = {};
+            if (formData.category === 'DEVELOPMENT') {
+                ['repoLink', 'branchName', 'techStack', 'components'].forEach(f => {
+                    if (formData[f] !== undefined) categoryData[f] = formData[f];
+                });
+            } else if (formData.category === 'TESTING') {
+                categoryData.testType = formData.testType;
+                categoryData.environment = formData.environment || 'STAGING';
+                categoryData.expectations = formData.expectations;
+            } else if (formData.category === 'MARKETING') {
+                ['campaignType', 'budget', 'platforms', 'phase'].forEach(f => {
+                    if (formData[f] !== undefined) categoryData[f] = formData[f];
+                });
+                if (categoryData.budget) categoryData.budget = parseFloat(categoryData.budget);
+            } else if (formData.category === 'DEVOPS') {
+                categoryData.environment = formData.environment || 'STAGING';
+                categoryData.riskLevel = formData.riskLevel;
+                categoryData.iacRef = formData.iacRef;
+                categoryData.deploymentUrl = formData.deploymentUrl;
+            } else if (formData.category === 'DESIGN') {
+                ['designType', 'figmaLink', 'assets'].forEach(f => {
+                    if (formData[f] !== undefined) categoryData[f] = formData[f];
+                });
+            }
+
             if (isEditing) {
-                await taskService.updateTask(task.id, dataToSubmit);
-                // Update specialized
-                const specialized = ['DEVELOPMENT', 'TESTING', 'MARKETING', 'DEVOPS', 'DESIGN'];
-                if (specialized.includes(formData.category)) {
-                    await taskService.updateSpecializedData(task.id, formData.category, dataToSubmit);
+                // Update main task
+                await taskService.updateTask(task.id, taskData);
+
+                // Update specialized data if applicable
+                const specializedCategories = ['DEVELOPMENT', 'TESTING', 'MARKETING', 'DEVOPS', 'DESIGN'];
+                if (specializedCategories.includes(formData.category)) {
+                    await taskService.updateSpecializedData(task.id, formData.category, categoryData);
                 }
 
-                // Update subtasks if they exist
-                if (formData.subTasks) {
-                    // For now, we'll just update the task and handle subtasks separately
-                    // In a more complete implementation, we would handle subtask updates
-                }
-
-                // Success - show toast and close modal
                 toast.success('Task updated successfully!');
             } else {
-                const response = await taskService.createTask(dataToSubmit);
-                // Store the created task ID to create subtasks after the task is created
+                // Construct initial payload with subtasks
+                const createData = { ...taskData, subTasks: formData.subTasks };
+                const response = await taskService.createTask(createData);
+
                 const createdTaskId = response.task.id;
 
-                // Mark that we need to create subtasks for this task
-                setTaskCreatedId(createdTaskId);
+                // Update specialized data for the new task
+                const specializedCategories = ['DEVELOPMENT', 'TESTING', 'MARKETING', 'DEVOPS', 'DESIGN'];
+                if (specializedCategories.includes(formData.category)) {
+                    await taskService.updateSpecializedData(createdTaskId, formData.category, categoryData);
+                }
 
-                // Success - show toast and close modal
                 toast.success('Task created successfully!');
             }
 
@@ -188,11 +210,11 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                             <div className="form-row">
                                 <div className="input-group">
                                     <label>Title</label>
-                                    <input type="text" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} required />
+                                    <input type="text" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} required disabled={!canEditAll} />
                                 </div>
                                 <div className="input-group">
                                     <label>Priority</label>
-                                    <select value={formData.priority} onChange={e => setFormData({ ...formData, priority: e.target.value })}>
+                                    <select value={formData.priority} onChange={e => setFormData({ ...formData, priority: e.target.value })} disabled={!canEditAll}>
                                         <option value="LOW">Low</option>
                                         <option value="MEDIUM">Medium</option>
                                         <option value="HIGH">High</option>
@@ -211,7 +233,7 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                                 </div>
                                 <div className="input-group">
                                     <label>Due Date</label>
-                                    <input type="date" value={formData.dueDate} onChange={e => setFormData({ ...formData, dueDate: e.target.value })} required />
+                                    <input type="date" value={formData.dueDate} onChange={e => setFormData({ ...formData, dueDate: e.target.value })} required disabled={!canEditAll} />
                                 </div>
                             </div>
 
@@ -355,7 +377,7 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
 
                             <div className="input-group">
                                 <label>Assignee</label>
-                                <select value={formData.assigneeId || ''} onChange={e => setFormData({ ...formData, assigneeId: e.target.value })}>
+                                <select value={formData.assigneeId || ''} onChange={e => setFormData({ ...formData, assigneeId: e.target.value })} disabled={!canEditAll}>
                                     <option value="">Unassigned</option>
                                     {teamMembers && teamMembers.length > 0 ? (
                                         teamMembers.map(member => {
@@ -369,7 +391,7 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                             <div className="form-row">
                                 <div className="input-group">
                                     <label>Estimated Hours</label>
-                                    <input type="number" step="0.5" value={formData.estimatedHours} onChange={e => setFormData({ ...formData, estimatedHours: e.target.value })} />
+                                    <input type="number" step="0.5" value={formData.estimatedHours} onChange={e => setFormData({ ...formData, estimatedHours: e.target.value })} disabled={!canEditAll} />
                                 </div>
                                 {task && (
                                     <div className="input-group">
@@ -381,7 +403,7 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
 
                             <div className="input-group">
                                 <label>Description</label>
-                                <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows="3" />
+                                <textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} rows="3" disabled={!canEditAll} />
                             </div>
 
                             {/* Subtasks Section - Improved UI */}
@@ -518,7 +540,7 @@ const TaskForm = ({ task, onClose, onSuccess, teamMembers = [], initialData = {}
                                 disabled={isSubmitting}
                                 style={{ opacity: isSubmitting ? 0.7 : 1, cursor: isSubmitting ? 'not-allowed' : 'pointer' }}
                             >
-                                {isSubmitting ? 'Saving...' : 'Save Task'}
+                                {isSubmitting ? 'Saving...' : (task ? 'Update Task' : 'Save Task')}
                             </button>
                         </form>
                     )}

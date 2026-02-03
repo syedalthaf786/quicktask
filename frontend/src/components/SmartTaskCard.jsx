@@ -18,13 +18,14 @@ import {
     ChevronLeft,
     Paperclip,
     CheckCircle,
-    Loader2
+    Loader2,
+    Edit2
 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { taskService } from '../services/taskService';
 import { Trash2 } from 'lucide-react';
 
-const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, onProgressUpdate, onDelete }) => {
+const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, onProgressUpdate, onDelete, onEdit }) => {
     const [showModal, setShowModal] = useState(false);
     const [parsedData, setParsedData] = useState(null);
     const [checkedItems, setCheckedItems] = useState({});
@@ -813,6 +814,23 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
                                                 }}
                                             >
                                                 <Trash2 size={16} /> Delete
+                                            </button>
+                                        )}
+
+                                        {onEdit && (
+                                            <button
+                                                className="btn btn-outline btn-sm"
+                                                onClick={() => {
+                                                    setShowModal(false);
+                                                    onEdit();
+                                                }}
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                                    fontSize: isMobile ? '0.75rem' : '0.85rem',
+                                                    padding: isMobile ? '6px 12px' : '8px 16px'
+                                                }}
+                                            >
+                                                <Edit2 size={16} /> Edit
                                             </button>
                                         )}
 

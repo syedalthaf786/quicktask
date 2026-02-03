@@ -22,16 +22,16 @@ const AttachmentManager = ({ taskId, attachments = [], onUpdate, readOnly = fals
             fileSize: 1024,
             createdAt: new Date().toISOString()
         };
-        
+
         // Update UI optimistically
         if (onUpdate) {
             onUpdate([...attachments, optimisticAttachment]);
         }
-        
+
         toast.success('Attachment added');
         setNewUrl('');
         setNewFileName('');
-        
+
         try {
             await taskService.addAttachment(taskId, {
                 fileName: optimisticAttachment.fileName,
@@ -39,7 +39,7 @@ const AttachmentManager = ({ taskId, attachments = [], onUpdate, readOnly = fals
                 fileType: optimisticAttachment.fileType,
                 fileSize: optimisticAttachment.fileSize
             });
-            
+
             // Refresh with real data
             if (onUpdate) onUpdate();
         } catch (error) {
@@ -53,17 +53,17 @@ const AttachmentManager = ({ taskId, attachments = [], onUpdate, readOnly = fals
 
     const handleDelete = async (attId) => {
         if (!window.confirm('Delete this attachment?')) return;
-        
+
         // Optimistic update - remove from UI immediately
         const attachmentToDelete = attachments.find(att => att.id === attId);
         const updatedAttachments = attachments.filter(att => att.id !== attId);
-        
+
         if (onUpdate) {
             onUpdate(updatedAttachments);
         }
-        
+
         toast.success('Attachment deleted');
-        
+
         try {
             await taskService.deleteAttachment(taskId, attId);
         } catch (error) {
@@ -104,7 +104,7 @@ const AttachmentManager = ({ taskId, attachments = [], onUpdate, readOnly = fals
             </div>
 
             {!readOnly && (
-                <form onSubmit={handleUpload} className="upload-form">
+                <div className="upload-form">
                     <input
                         type="text"
                         placeholder="File Name"
@@ -121,10 +121,15 @@ const AttachmentManager = ({ taskId, attachments = [], onUpdate, readOnly = fals
                         className="input-sm"
                         required
                     />
-                    <button type="submit" className="btn btn-secondary btn-sm" disabled={isUploading}>
+                    <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={isUploading}
+                        onClick={handleUpload}
+                    >
                         <Plus size={14} /> Add
                     </button>
-                </form>
+                </div>
             )}
         </div>
     );
