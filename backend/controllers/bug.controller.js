@@ -60,7 +60,7 @@ exports.getBugReportById = async (req, res) => {
         const bugId = req.params.id;
         const userId = req.user.id;
 
-        const bug = await checkBugAccess(bugId, userId);
+        const bug = await accessService.checkBugAccess(bugId, userId);
         if (!bug) {
             return res.status(404).json({ success: false, message: 'Bug report not found or access denied' });
         }
@@ -144,7 +144,7 @@ exports.updateBugReport = async (req, res) => {
         const bugId = req.params.id;
         const userId = req.user.id;
 
-        const bug = await checkBugAccess(bugId, userId);
+        const bug = await accessService.checkBugAccess(bugId, userId);
         if (!bug) {
             return res.status(404).json({ success: false, message: 'Bug report not found or access denied' });
         }
@@ -201,20 +201,22 @@ exports.deleteBugReport = async (req, res) => {
         const bugId = req.params.id;
         const userId = req.user.id;
 
-        const bug = await checkBugAccess(bugId, userId);
+        const bug = await accessService.checkBugAccess(bugId, userId);
         if (!bug) {
             return res.status(404).json({ success: false, message: 'Bug report not found or access denied' });
         }
 
-        // Only reporter or task creator/team owner can delete
+        // Only reporter, assignee, or task creator/team owner can delete
         const isReporter = bug.reporterId === userId;
+        const isAssignee = bug.assigneeId === userId;
+
         const taskAccess = await accessService.checkTaskAccess(bug.taskId, userId);
         const isTaskOwner = taskAccess && (taskAccess.creatorId === userId ||
             (taskAccess.teamId && (await prisma.team.findUnique({
                 where: { id: taskAccess.teamId }
             })).ownerId === userId));
 
-        if (!isReporter && !isTaskOwner) {
+        if (!isReporter && !isAssignee && !isTaskOwner) {
             return res.status(403).json({ success: false, message: 'Unauthorized to delete this bug report' });
         }
 

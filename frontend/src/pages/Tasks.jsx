@@ -22,8 +22,21 @@ const Tasks = () => {
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
-    const [permissions, setPermissions] = useState(null); // Still useful for card actions
-    // Grid view only - removed list view option
+    const [permissions, setPermissions] = useState(null);
+    
+    // Pagination state
+    const [pagination, setPagination] = useState({
+        currentPage: 1,
+        totalPages: 1,
+        totalCount: 0,
+        hasNextPage: false,
+        hasPrevPage: false,
+        limit: 20
+    });
+    
+    // Loading states for different operations
+    const [loadingMore, setLoadingMore] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
 
     const [filters, setFilters] = useState({
         status: 'all',
@@ -52,10 +65,10 @@ const Tasks = () => {
 
     useEffect(() => {
         if (user) {
-            fetchTasks();
+            fetchTasks(1);
             fetchTeams();
         }
-    }, [filters, sortBy, order, user]);
+    }, [user]);
 
     useEffect(() => {
         if (selectedTeam) {
@@ -92,25 +105,81 @@ const Tasks = () => {
         }
     }, [teams, selectedTeam]);
 
-    const fetchTasks = async () => {
+    const fetchTasks = async (page = 1, append = false) => {
         try {
-            setLoading(true);
-            const data = await taskService.getTasks({ ...filters, sortBy, order });
+            if (append) {
+                setLoadingMore(true);
+            } else {
+                setLoading(true);
+                setInitialLoad(false);
+            }
+            
+            const params = { 
+                ...filters, 
+                sortBy, 
+                order, 
+                page, 
+                limit: pagination.limit 
+            };
+            
+            const data = await taskService.getTasks(params);
             if (!data || !data.success) throw new Error(data?.message || 'Failed to fetch tasks');
 
-            let visibleTasks = data.tasks;
-            // Backend now handles hiding bugs and subtasks (parentId=null, isBugReport=false)
-            // so we don't need to manually filter here.
-
-            setTasks(visibleTasks);
-            setFilteredTasks(visibleTasks);
+            // Handle pagination response
+            if (data.pagination) {
+                setPagination({
+                    currentPage: data.pagination.currentPage,
+                    totalPages: data.pagination.totalPages,
+                    totalCount: data.pagination.totalCount,
+                    hasNextPage: data.pagination.hasNextPage,
+                    hasPrevPage: data.pagination.hasPrevPage,
+                    limit: data.pagination.limit
+                });
+                
+                if (append) {
+                    // Append new tasks to existing list
+                    setTasks(prev => [...prev, ...data.tasks]);
+                    setFilteredTasks(prev => [...prev, ...data.tasks]);
+                } else {
+                    // Replace tasks
+                    setTasks(data.tasks);
+                    setFilteredTasks(data.tasks);
+                }
+            } else {
+                // Fallback for non-paginated response
+                setTasks(data.tasks || []);
+                setFilteredTasks(data.tasks || []);
+                setPagination({
+                    currentPage: 1,
+                    totalPages: 1,
+                    totalCount: data.tasks?.length || 0,
+                    hasNextPage: false,
+                    hasPrevPage: false,
+                    limit: 20
+                });
+            }
         } catch (error) {
             console.error('Error fetching tasks:', error);
             toast.error(error.message || 'Failed to fetch tasks');
         } finally {
             setLoading(false);
+            setLoadingMore(false);
         }
     };
+
+    // Load more tasks function
+    const loadMoreTasks = () => {
+        if (pagination.hasNextPage && !loadingMore) {
+            fetchTasks(pagination.currentPage + 1, true);
+        }
+    };
+
+    // Reset to first page when filters change
+    useEffect(() => {
+        if (!initialLoad) {
+            fetchTasks(1);
+        }
+    }, [filters, sortBy, order]);
 
     const handleDelete = async (id) => {
         if (!window.confirm('Are you sure you want to delete this task?')) return;
@@ -233,151 +302,218 @@ const Tasks = () => {
                         <button className="btn btn-primary" onClick={() => openModal()}><Plus size={20} /> Create Task</button>
                     </div>
                 ) : (
-                    <div className="tasks-grid">
-                        {filteredTasks.map((task, index) => {
-                            const dueDateStatus = getDueDateStatus(task.dueDate, task.status);
+                    <>
+                        <div className="tasks-grid">
+                            {filteredTasks.map((task, index) => {
+                                const dueDateStatus = getDueDateStatus(task.dueDate, task.status);
 
-                            // Smart Task Condition: 
-                            // 1. Has JSON description (AI generated)
-                            // 2. OR Has explicit subtasks (User created)
-                            // 3. OR Has bug reports
-                            const isJsonDescription = task.description && task.description.trim().startsWith('{');
-                            const hasSubTasks = task.subTasks && task.subTasks.length > 0;
-                            const hasBugReports = task.bugReports && task.bugReports.length > 0;
-                            const isSmartTask = isJsonDescription || hasSubTasks || hasBugReports;
+                                // Smart Task Condition: 
+                                // 1. Has JSON description (AI generated)
+                                // 2. OR Has explicit subtasks (User created)
+                                // 3. OR Has bug reports
+                                const isJsonDescription = task.description && task.description.trim().startsWith('{');
+                                const hasSubTasks = task.subTasks && task.subTasks.length > 0;
+                                const hasBugReports = task.bugReports && task.bugReports.length > 0;
+                                const isSmartTask = isJsonDescription || hasSubTasks || hasBugReports;
 
-                            if (isSmartTask) {
-                                return (
-                                    <SmartTaskCard
-                                        key={task.id || task._id}
-                                        task={task}
-                                        onRefresh={fetchTasks} // Pass the refresh function
-                                        teamMembers={teamMembers}
-                                        currentUser={user}
-                                        onProgressUpdate={(taskId, progress) => {
-                                            // Optimistic update - update UI immediately
-                                            setTasks(prevTasks =>
-                                                prevTasks.map(task =>
-                                                    task.id === taskId
-                                                        ? { ...task, progress }
-                                                        : task
-                                                )
-                                            );
-                                            setFilteredTasks(prevTasks =>
-                                                prevTasks.map(task =>
-                                                    task.id === taskId
-                                                        ? { ...task, progress }
-                                                        : task
-                                                )
-                                            );
-                                        }}
-                                        onAssign={async (taskId, assigneeId) => {
-                                            // Optimistic update - update UI immediately
-                                            setTasks(prevTasks =>
-                                                prevTasks.map(task =>
-                                                    task.id === taskId
-                                                        ? { ...task, assigneeId, assignee: assigneeId ? teamMembers.find(m => m.user.id === assigneeId)?.user : null }
-                                                        : task
-                                                )
-                                            );
-                                            setFilteredTasks(prevTasks =>
-                                                prevTasks.map(task =>
-                                                    task.id === taskId
-                                                        ? { ...task, assigneeId, assignee: assigneeId ? teamMembers.find(m => m.user.id === assigneeId)?.user : null }
-                                                        : task
-                                                )
-                                            );
-
-                                            try {
-                                                await taskService.updateTask(taskId, { assigneeId });
-                                                toast.success('Assignee updated');
-                                            } catch (error) {
-                                                // Revert on error
-                                                toast.error('Failed to assign task');
-                                                fetchTasks(); // Refresh to get correct state
-                                            }
-                                        }}
-                                        onDelete={async (taskId) => {
-                                            if (!window.confirm('Are you sure you want to delete this task?')) return;
-
-                                            // Optimistic update - remove from UI immediately
-                                            const taskToDelete = tasks.find(t => t.id === taskId);
-                                            setTasks(prev => prev.filter(t => t.id !== taskId));
-                                            setFilteredTasks(prev => prev.filter(t => t.id !== taskId));
-                                            toast.success('Task deleted successfully');
-
-                                            try {
-                                                await taskService.deleteTask(taskId);
-                                            } catch (error) {
-                                                // Revert on error
-                                                toast.error('Failed to delete task');
-                                                if (taskToDelete) {
-                                                    setTasks(prev => [...prev, taskToDelete]);
-                                                    setFilteredTasks(prev => [...prev, taskToDelete]);
+                                if (isSmartTask) {
+                                    return (
+                                        <SmartTaskCard
+                                            key={task.id || task._id}
+                                            task={task}
+                                            onRefresh={() => fetchTasks(pagination.currentPage)}
+                                            teamMembers={teamMembers}
+                                            currentUser={user}
+                                            onProgressUpdate={async (taskId, progress) => {
+                                                // Store original state for rollback
+                                                const originalTask = tasks.find(t => t.id === taskId);
+                                                const originalProgress = originalTask?.progress;
+                                                                                        
+                                                // Optimistic update - update UI immediately
+                                                setTasks(prevTasks =>
+                                                    prevTasks.map(task =>
+                                                        task.id === taskId
+                                                            ? { ...task, progress }
+                                                            : task
+                                                    )
+                                                );
+                                                setFilteredTasks(prevTasks =>
+                                                    prevTasks.map(task =>
+                                                        task.id === taskId
+                                                            ? { ...task, progress }
+                                                            : task
+                                                    )
+                                                );
+                                            
+                                                try {
+                                                    await taskService.updateTaskProgress(taskId, progress);
+                                                    toast.success('Progress updated');
+                                                } catch (error) {
+                                                    // Revert on error
+                                                    toast.error('Failed to update progress');
+                                                    setTasks(prevTasks =>
+                                                        prevTasks.map(task =>
+                                                            task.id === taskId
+                                                                ? { ...task, progress: originalProgress }
+                                                                : task
+                                                        )
+                                                    );
+                                                    setFilteredTasks(prevTasks =>
+                                                        prevTasks.map(task =>
+                                                            task.id === taskId
+                                                                ? { ...task, progress: originalProgress }
+                                                                : task
+                                                        )
+                                                    );
                                                 }
-                                            }
-                                        }}
-                                        onEdit={() => openModal(task)}
-                                    />
+                                            }}
+                                            onAssign={async (taskId, assigneeId) => {
+                                                // Optimistic update - update UI immediately
+                                                setTasks(prevTasks =>
+                                                    prevTasks.map(task =>
+                                                        task.id === taskId
+                                                            ? { ...task, assigneeId, assignee: assigneeId ? teamMembers.find(m => m.user.id === assigneeId)?.user : null }
+                                                            : task
+                                                    )
+                                                );
+                                                setFilteredTasks(prevTasks =>
+                                                    prevTasks.map(task =>
+                                                        task.id === taskId
+                                                            ? { ...task, assigneeId, assignee: assigneeId ? teamMembers.find(m => m.user.id === assigneeId)?.user : null }
+                                                            : task
+                                                    )
+                                                );
+
+                                                try {
+                                                    await taskService.updateTask(taskId, { assigneeId });
+                                                    toast.success('Assignee updated');
+                                                } catch (error) {
+                                                    // Revert on error
+                                                    toast.error('Failed to assign task');
+                                                    fetchTasks(pagination.currentPage); // Refresh current page
+                                                }
+                                            }}
+                                            onDelete={async (taskId) => {
+                                                if (!window.confirm('Are you sure you want to delete this task?')) return;
+
+                                                // Optimistic update - remove from UI immediately
+                                                const taskToDelete = tasks.find(t => t.id === taskId);
+                                                setTasks(prev => prev.filter(t => t.id !== taskId));
+                                                setFilteredTasks(prev => prev.filter(t => t.id !== taskId));
+                                                toast.success('Task deleted successfully');
+
+                                                try {
+                                                    await taskService.deleteTask(taskId);
+                                                } catch (error) {
+                                                    // Revert on error
+                                                    toast.error('Failed to delete task');
+                                                    if (taskToDelete) {
+                                                        setTasks(prev => [...prev, taskToDelete]);
+                                                        setFilteredTasks(prev => [...prev, taskToDelete]);
+                                                    }
+                                                }
+                                            }}
+                                            onEdit={() => openModal(task)}
+                                        />
+                                    );
+                                }
+
+                                return (
+                                    <motion.div key={task.id} className={`task-card card ${dueDateStatus}`} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }}>
+                                        <div className="task-card-header">
+                                            <h3 className="task-title">{task.title}</h3>
+                                            <div className="task-actions">
+                                                <button className="task-action-btn" onClick={() => openModal(task)} title="Edit"><Edit2 size={16} /></button>
+                                                {(task.creatorId === user?.id || task.team?.ownerId === user?.id) && (
+                                                    <button
+                                                        className="task-action-btn delete"
+                                                        onClick={() => {
+                                                            if (!window.confirm('Are you sure you want to delete this task?')) return;
+
+                                                            // Optimistic update - remove from UI immediately
+                                                            const taskToDelete = tasks.find(t => t.id === task.id);
+                                                            setTasks(prev => prev.filter(t => t.id !== task.id));
+                                                            setFilteredTasks(prev => prev.filter(t => t.id !== task.id));
+                                                            toast.success('Task deleted successfully');
+
+                                                            taskService.deleteTask(task.id).catch(error => {
+                                                                // Revert on error
+                                                                toast.error('Failed to delete task');
+                                                                if (taskToDelete) {
+                                                                    setTasks(prev => [...prev, taskToDelete]);
+                                                                    setFilteredTasks(prev => [...prev, taskToDelete]);
+                                                                }
+                                                            });
+                                                        }}
+                                                        title="Delete"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {task.description && <p className="task-description">{task.description}</p>}
+                                        <div className="task-meta">
+                                            <div className="task-badges">
+                                                <span className={`badge badge-${task.priority.toLowerCase()}`}>{task.priority}</span>
+                                                <span className={`badge badge-${task.status.toLowerCase().replace(' ', '-')}`}>{task.status}</span>
+                                            </div>
+                                            <div className={`task-due-date ${dueDateStatus}`}>
+                                                <Calendar size={14} />
+                                                <span>{format(new Date(task.dueDate), 'MMM dd, yyyy')}</span>
+                                                {dueDateStatus === 'overdue' && <AlertCircle size={14} />}
+                                            </div>
+                                        </div>
+                                        {task.assignee && (
+                                            <div className="task-assignee">
+                                                <div className="assignee-avatar">{task.assignee.name.charAt(0).toUpperCase()}</div>
+                                                <span>Assigned to {task.assignee.name}</span>
+                                            </div>
+                                        )}
+                                    </motion.div>
                                 );
-                            }
-
-                            return (
-                                <motion.div key={task.id} className={`task-card card ${dueDateStatus}`} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.05 }}>
-                                    <div className="task-card-header">
-                                        <h3 className="task-title">{task.title}</h3>
-                                        <div className="task-actions">
-                                            <button className="task-action-btn" onClick={() => openModal(task)} title="Edit"><Edit2 size={16} /></button>
-                                            {(task.creatorId === user?.id || task.team?.ownerId === user?.id) && (
-                                                <button
-                                                    className="task-action-btn delete"
-                                                    onClick={() => {
-                                                        if (!window.confirm('Are you sure you want to delete this task?')) return;
-
-                                                        // Optimistic update - remove from UI immediately
-                                                        const taskToDelete = tasks.find(t => t.id === task.id);
-                                                        setTasks(prev => prev.filter(t => t.id !== task.id));
-                                                        setFilteredTasks(prev => prev.filter(t => t.id !== task.id));
-                                                        toast.success('Task deleted successfully');
-
-                                                        taskService.deleteTask(task.id).catch(error => {
-                                                            // Revert on error
-                                                            toast.error('Failed to delete task');
-                                                            if (taskToDelete) {
-                                                                setTasks(prev => [...prev, taskToDelete]);
-                                                                setFilteredTasks(prev => [...prev, taskToDelete]);
-                                                            }
-                                                        });
-                                                    }}
-                                                    title="Delete"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            )}
-                                        </div>
+                            })}
+                        </div>
+                        
+                        {/* Pagination Controls */}
+                        {(pagination.totalPages > 1 || pagination.hasNextPage) && (
+                            <div className="pagination-controls">
+                                <div className="pagination-info">
+                                    Showing {((pagination.currentPage - 1) * pagination.limit) + 1} to {Math.min(pagination.currentPage * pagination.limit, pagination.totalCount)} of {pagination.totalCount} tasks
+                                </div>
+                                <div className="pagination-buttons">
+                                    <button 
+                                        className="btn btn-secondary"
+                                        onClick={() => fetchTasks(pagination.currentPage - 1)}
+                                        disabled={!pagination.hasPrevPage || loading}
+                                    >
+                                        Previous
+                                    </button>
+                                    <span className="pagination-current">
+                                        Page {pagination.currentPage} of {pagination.totalPages}
+                                    </span>
+                                    <button 
+                                        className="btn btn-secondary"
+                                        onClick={() => fetchTasks(pagination.currentPage + 1)}
+                                        disabled={!pagination.hasNextPage || loading}
+                                    >
+                                        Next
+                                    </button>
+                                </div>
+                                {pagination.hasNextPage && (
+                                    <div className="load-more-container">
+                                        <button 
+                                            className="btn btn-primary"
+                                            onClick={loadMoreTasks}
+                                            disabled={loadingMore}
+                                        >
+                                            {loadingMore ? 'Loading...' : `Load More (${pagination.limit} more)`}
+                                        </button>
                                     </div>
-                                    {task.description && <p className="task-description">{task.description}</p>}
-                                    <div className="task-meta">
-                                        <div className="task-badges">
-                                            <span className={`badge badge-${task.priority.toLowerCase()}`}>{task.priority}</span>
-                                            <span className={`badge badge-${task.status.toLowerCase().replace(' ', '-')}`}>{task.status}</span>
-                                        </div>
-                                        <div className={`task-due-date ${dueDateStatus}`}>
-                                            <Calendar size={14} />
-                                            <span>{format(new Date(task.dueDate), 'MMM dd, yyyy')}</span>
-                                            {dueDateStatus === 'overdue' && <AlertCircle size={14} />}
-                                        </div>
-                                    </div>
-                                    {task.assignee && (
-                                        <div className="task-assignee">
-                                            <div className="assignee-avatar">{task.assignee.name.charAt(0).toUpperCase()}</div>
-                                            <span>Assigned to {task.assignee.name}</span>
-                                        </div>
-                                    )}
-                                </motion.div>
-                            );
-                        })}
-                    </div>
+                                )}
+                            </div>
+                        )}
+                    </>
                 )}
 
                 <AnimatePresence>
@@ -385,7 +521,11 @@ const Tasks = () => {
                         <TaskForm
                             task={editingTask}
                             onClose={closeModal}
-                            onSuccess={fetchTasks}
+                            onSuccess={() => {
+                                // Reset to first page and refresh
+                                setPagination(prev => ({ ...prev, currentPage: 1 }));
+                                fetchTasks(1);
+                            }}
                             teamMembers={teamMembers}
                         />
                     )}

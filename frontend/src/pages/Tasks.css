@@ -501,3 +501,64 @@
     cursor: not-allowed;
     background: var(--bg-tertiary);
 }
+
+/* Pagination Controls */
+.pagination-controls {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: var(--card-bg);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+}
+
+.pagination-info {
+    text-align: center;
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.pagination-buttons {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.pagination-current {
+    padding: 0.5rem 1rem;
+    background: var(--primary);
+    color: white;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.load-more-container {
+    text-align: center;
+    margin-top: 1rem;
+}
+
+.load-more-container button {
+    min-width: 200px;
+}
+
+/* Loading states */
+.loading-more {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+/* Responsive pagination */
+@media (max-width: 768px) {
+    .pagination-buttons {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .pagination-current {
+        padding: 0.3rem 0.8rem;
+        font-size: 0.8rem;
+    }
+}

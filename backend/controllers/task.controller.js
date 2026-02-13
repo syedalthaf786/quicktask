@@ -5,58 +5,81 @@ const accessService = require('../services/access.service');
 
 exports.getTasks = async (req, res) => {
     try {
-        const { status, priority, search, sortBy, order, category, teamId } = req.query;
+        const { status, priority, search, sortBy, order, category, teamId, page = 1, limit = 20 } = req.query;
         const userId = req.user.id;
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+
+        // Validate pagination parameters
+        if (isNaN(pageNum) || pageNum < 1) {
+            return res.status(400).json({ success: false, message: 'Invalid page number' });
+        }
+        if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+            return res.status(400).json({ success: false, message: 'Limit must be between 1 and 100' });
+        }
 
         // Use centralized visibility filter
         let where = await accessService.getTaskVisibilityFilter(userId);
 
-        // With the new SubTask model, subtasks are stored separately and won't appear in main task list
-        // No need to filter by parentId since it doesn't exist in the schema
-
-        // Filter bugs if specific category is requested
-        if (category === 'TESTING') {
-            // Explicit fetch for testing tasks/bugs
-        }
-
+        // Apply filters
         if (status && status !== 'all') where.status = status.toUpperCase().replace(' ', '_');
         if (priority && priority !== 'all') where.priority = priority.toUpperCase();
         if (category && category !== 'all') where.category = category.toUpperCase();
         if (teamId) where.teamId = teamId;
         if (search) where.title = { contains: search, mode: 'insensitive' };
 
+        // Build order by clause
         let orderBy = {};
         if (sortBy) orderBy[sortBy] = order === 'asc' ? 'asc' : 'desc';
         else orderBy.createdAt = 'desc';
 
-        const tasks = await prisma.task.findMany({
-            where,
-            orderBy,
-            include: {
-                creator: { select: { id: true, name: true, email: true, avatar: true } },
-                assignee: { select: { id: true, name: true, email: true, avatar: true } },
-                team: { select: { id: true, name: true, avatar: true, ownerId: true } },
-                developmentData: true,
-                testingData: true,
-                marketingData: true,
-                devOpsData: true,
-                designData: true,
-                attachments: true,
-                subTasks: true,
-                bugReports: { include: { reporter: { select: { id: true, name: true, email: true, avatar: true } }, assignee: { select: { id: true, name: true, email: true, avatar: true } } } },
-                _count: { select: { comments: true, attachments: true } }
+        // Execute paginated query
+        const [tasks, totalCount] = await Promise.all([
+            prisma.task.findMany({
+                where,
+                orderBy,
+                skip: (pageNum - 1) * limitNum,
+                take: limitNum,
+                include: {
+                    creator: { select: { id: true, name: true, email: true, avatar: true } },
+                    assignee: { select: { id: true, name: true, email: true, avatar: true } },
+                    team: { select: { id: true, name: true, avatar: true, ownerId: true } },
+                    developmentData: true,
+                    testingData: true,
+                    marketingData: true,
+                    devOpsData: true,
+                    designData: true,
+                    attachments: true,
+                    subTasks: true,
+                    bugReports: {
+                        include: {
+                            reporter: { select: { id: true, name: true, email: true, avatar: true } },
+                            assignee: { select: { id: true, name: true, email: true, avatar: true } }
+                        }
+                    },
+                    _count: { select: { comments: true, attachments: true } }
+                }
+            }),
+            prisma.task.count({ where })
+        ]);
+
+        // Calculate pagination metadata
+        const totalPages = Math.ceil(totalCount / limitNum);
+        const hasNextPage = pageNum < totalPages;
+        const hasPrevPage = pageNum > 1;
+
+        res.status(200).json({
+            success: true,
+            tasks,
+            pagination: {
+                currentPage: pageNum,
+                totalPages,
+                totalCount,
+                hasNextPage,
+                hasPrevPage,
+                limit: limitNum
             }
         });
-
-        // Post-filtering is no longer necessary as the `where` clause handles:
-        // - Creator/Assignee visibility
-        // - Team Member visibility
-        // - Team Owner visibility
-        // - Bug visibility (currently checking if isBugReport is true)
-
-        const filteredTasks = tasks;
-
-        res.status(200).json({ success: true, count: filteredTasks.length, tasks: filteredTasks });
     } catch (error) {
         console.error('Get tasks error:', error);
         res.status(500).json({ success: false, message: 'Server error' });
@@ -71,38 +94,60 @@ exports.getTaskById = async (req, res) => {
 
         if (!task) return res.status(404).json({ success: false, message: 'Task not found or access denied' });
 
+        // Get user permissions to determine what data to fetch
+        const permissions = await accessService.getTaskPermissions(task, userId);
+
+        // Build selective includes based on permissions and query parameters
+        const include = {
+            creator: { select: { id: true, name: true, email: true, avatar: true } },
+            assignee: { select: { id: true, name: true, email: true, avatar: true } },
+            team: { select: { id: true, name: true, avatar: true, ownerId: true } },
+            developmentData: true,
+            testingData: true,
+            marketingData: true,
+            devOpsData: true,
+            designData: true,
+            attachments: { include: { user: { select: { id: true, name: true } } } },
+            subTasks: { include: { assignee: { select: { name: true, avatar: true } } } }
+        };
+
+        // Only fetch heavy relations if user has permission
+        if (permissions.canViewHistory) {
+            include.history = {
+                include: { user: { select: { name: true } } },
+                orderBy: { createdAt: 'desc' },
+                take: 20
+            };
+        }
+
+        if (permissions.canViewSubmissions) {
+            include.submissions = {
+                include: { user: { select: { id: true, name: true, avatar: true } } },
+                orderBy: { createdAt: 'desc' }
+            };
+        }
+
+        // Always fetch comments but limit the amount
+        include.comments = {
+            include: { user: { select: { id: true, name: true, email: true, avatar: true } } },
+            orderBy: { createdAt: 'desc' },
+            take: 50 // Limit comments to prevent excessive data
+        };
+
+        // Only fetch bug reports if the task has them
+        if (task.category === 'TESTING') {
+            include.bugReports = {
+                include: {
+                    reporter: { select: { id: true, name: true, email: true, avatar: true } },
+                    assignee: { select: { id: true, name: true, email: true, avatar: true } }
+                }
+            };
+        }
+
         const fullTask = await prisma.task.findUnique({
             where: { id: taskId },
-            include: {
-                creator: { select: { id: true, name: true, email: true, avatar: true } },
-                assignee: { select: { id: true, name: true, email: true, avatar: true } },
-                team: { select: { id: true, name: true, avatar: true, ownerId: true } },
-                developmentData: true,
-                testingData: true,
-                marketingData: true,
-                devOpsData: true,
-                designData: true,
-                attachments: { include: { user: { select: { id: true, name: true } } } },
-                subTasks: { include: { assignee: { select: { name: true, avatar: true } } } }, // Subtasks
-                bugReports: { include: { reporter: { select: { id: true, name: true, email: true, avatar: true } }, assignee: { select: { id: true, name: true, email: true, avatar: true } } } },
-                history: {
-                    include: { user: { select: { name: true } } },
-                    orderBy: { createdAt: 'desc' },
-                    take: 20
-                },
-                submissions: {
-                    include: { user: { select: { id: true, name: true, avatar: true } } },
-                    orderBy: { createdAt: 'desc' }
-                },
-                comments: {
-                    include: { user: { select: { id: true, name: true, email: true, avatar: true } } },
-                    orderBy: { createdAt: 'desc' }
-                }
-            }
+            include
         });
-
-        // Calculate permissions using centralized service
-        const permissions = await accessService.getTaskPermissions(fullTask, userId);
 
         res.status(200).json({
             success: true,
@@ -236,101 +281,209 @@ exports.updateTask = async (req, res) => {
         const taskId = req.params.id;
         const userId = req.user.id;
         const existingTask = await accessService.checkTaskAccess(taskId, userId);
-        if (!existingTask) return res.status(404).json({ success: false, message: 'Not found' });
-
-        let isTeamOwner = false;
-        if (existingTask.teamId) {
-            const team = await prisma.team.findUnique({ where: { id: existingTask.teamId } });
-            if (team && team.ownerId === userId) isTeamOwner = true;
+        if (!existingTask) {
+            return res.status(404).json({ success: false, message: 'Task not found or access denied' });
         }
-        const isOwner = isTeamOwner;
-        const isCreator = existingTask.creatorId === userId;
 
+        // Get detailed permissions for this user
+        const permissions = await accessService.getTaskPermissions(existingTask, userId);
+
+        // Validate and sanitize input data
         const updateData = {};
-        const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'assigneeId', 'teamId', 'estimatedHours', 'actualHours', 'progress'];
+        const errors = [];
 
-        // Logic for permissions (simplified)
-        if (isOwner || isCreator) {
-            allowedFields.forEach(field => {
-                if (req.body[field] !== undefined) updateData[field] = req.body[field];
-            });
-        } else {
-            // Assignees can update status, actualHours and progress
-            if (req.body.status) updateData.status = req.body.status.toUpperCase().replace(' ', '_');
-            if (req.body.actualHours) updateData.actualHours = parseFloat(req.body.actualHours);
-            if (req.body.progress !== undefined) updateData.progress = req.body.progress;
-        }
+        // Define field permissions based on user role
+        const fieldPermissions = {
+            // Creator and Team Owner can update all fields
+            canEditAll: ['title', 'description', 'priority', 'status', 'dueDate', 'assigneeId', 'teamId', 'estimatedHours'],
+            // Assignees can update limited fields
+            canEditLimited: ['status', 'actualHours', 'progress', 'assigneeId'],
+            // Everyone can update progress
+            canUpdateProgress: ['progress']
+        };
 
-        if (updateData.status === 'COMPLETED') updateData.completedAt = new Date();
-        else if (updateData.status && updateData.status !== 'COMPLETED') updateData.completedAt = null;
+        const allowedFields = permissions.canEdit
+            ? fieldPermissions.canEditAll
+            : permissions.canUpdateStatus
+                ? fieldPermissions.canEditLimited
+                : fieldPermissions.canUpdateProgress;
 
-        // Handle progress updates for all task categories
-        if (req.body.progress !== undefined) {
-            // Store progress in the appropriate category-specific table
-            switch (existingTask.category) {
-                case 'DEVELOPMENT':
-                    await prisma.developmentTask.update({
-                        where: { taskId },
-                        data: { progress: req.body.progress }
-                    });
-                    break;
-                case 'TESTING':
-                    await prisma.testingTask.update({
-                        where: { taskId },
-                        data: { testCases: req.body.progress }
-                    });
-                    break;
-                case 'MARKETING':
-                    await prisma.marketingTask.update({
-                        where: { taskId },
-                        data: { progress: req.body.progress }
-                    });
-                    break;
-                case 'DEVOPS':
-                    await prisma.devOpsTask.update({
-                        where: { taskId },
-                        data: { progress: req.body.progress }
-                    });
-                    break;
-                case 'DESIGN':
-                    await prisma.designTask.update({
-                        where: { taskId },
-                        data: { progress: req.body.progress }
-                    });
-                    break;
-                default:
-                    // For GENERAL tasks, store in main task model if needed
-                    // Or ignore if not applicable
-                    break;
+        // Validate each field
+        for (const field of allowedFields) {
+            if (req.body[field] !== undefined) {
+                const value = req.body[field];
+
+                switch (field) {
+                    case 'title':
+                        if (typeof value !== 'string' || value.trim().length === 0) {
+                            errors.push('Title must be a non-empty string');
+                        } else {
+                            updateData.title = value.trim();
+                        }
+                        break;
+                    case 'description':
+                        updateData.description = typeof value === 'string' ? value : null;
+                        break;
+                    case 'priority':
+                        const validPriorities = ['LOW', 'MEDIUM', 'HIGH'];
+                        const priority = value.toUpperCase();
+                        if (validPriorities.includes(priority)) {
+                            updateData.priority = priority;
+                        } else {
+                            errors.push('Invalid priority value');
+                        }
+                        break;
+                    case 'status':
+                        const validStatuses = ['TODO', 'IN_PROGRESS', 'COMPLETED', 'BLOCKED'];
+                        const status = value.toUpperCase().replace(' ', '_');
+                        if (validStatuses.includes(status)) {
+                            updateData.status = status;
+                        } else {
+                            errors.push('Invalid status value');
+                        }
+                        break;
+                    case 'dueDate':
+                        const date = new Date(value);
+                        if (isNaN(date.getTime())) {
+                            errors.push('Invalid due date format');
+                        } else {
+                            updateData.dueDate = date;
+                        }
+                        break;
+                    case 'estimatedHours':
+                    case 'actualHours':
+                        const numValue = parseFloat(value);
+                        if (isNaN(numValue) || numValue < 0) {
+                            errors.push(`${field} must be a positive number`);
+                        } else {
+                            updateData[field] = numValue;
+                        }
+                        break;
+                    case 'assigneeId':
+                        // Allow assignee to reassign to themselves or unassign
+                        if (value === null || value === '' || value === userId) {
+                            updateData.assigneeId = value || null;
+                        } else if (permissions.canAssign) {
+                            // Only creators/owners can assign to others
+                            updateData.assigneeId = value;
+                        } else {
+                            errors.push('You can only assign tasks to yourself');
+                        }
+                        break;
+                    case 'progress':
+                        // Progress validation handled separately for category-specific storage
+                        break;
+                }
             }
         }
 
+        // Return validation errors
+        if (errors.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors
+            });
+        }
+
+        // Handle status completion timestamp
+        if (updateData.status === 'COMPLETED') {
+            updateData.completedAt = new Date();
+        } else if (updateData.status && updateData.status !== 'COMPLETED') {
+            updateData.completedAt = null;
+        }
+
+        // Handle progress updates with proper category-specific storage
+        let progressUpdatePromise = Promise.resolve();
+        if (req.body.progress !== undefined) {
+            const progressData = req.body.progress;
+
+            // Validate progress data structure
+            if (typeof progressData !== 'object' && !Array.isArray(progressData) && typeof progressData !== 'number') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid progress data format'
+                });
+            }
+
+            // Store progress in the appropriate category-specific table
+            const progressFieldMap = {
+                'DEVELOPMENT': 'progress',
+                'TESTING': 'testCases',
+                'MARKETING': 'progress',
+                'DEVOPS': 'progress',
+                'DESIGN': 'progress'
+            };
+
+            const progressField = progressFieldMap[existingTask.category];
+            if (progressField) {
+                const modelNameMap = {
+                    'DEVELOPMENT': 'developmentTask',
+                    'TESTING': 'testingTask',
+                    'MARKETING': 'marketingTask',
+                    'DEVOPS': 'devOpsTask',
+                    'DESIGN': 'designTask'
+                };
+
+                const modelName = modelNameMap[existingTask.category];
+                if (modelName) {
+                    progressUpdatePromise = prisma[modelName].upsert({
+                        where: { taskId },
+                        update: { [progressField]: progressData },
+                        create: { taskId, [progressField]: progressData }
+                    }).catch(err => {
+                        console.error(`Progress update failed for ${modelName}:`, err);
+                        // Don't fail the entire operation if progress update fails
+                    });
+                }
+            }
+        }
+
+        // Execute update in transaction with proper history logging
         const updatedTask = await prisma.$transaction(async (tx) => {
+            // Update main task
             const result = await tx.task.update({
                 where: { id: taskId },
                 data: updateData
             });
 
-            // Log history for status change
-            if (updateData.status && updateData.status !== existingTask.status) {
-                await tx.taskHistory.create({
-                    data: {
-                        action: 'UPDATED',
-                        fieldName: 'status',
-                        oldValue: existingTask.status,
-                        newValue: updateData.status,
-                        taskId,
-                        userId
-                    }
-                });
+            // Log history for all changed fields
+            const historyPromises = [];
+            for (const [field, newValue] of Object.entries(updateData)) {
+                if (field !== 'completedAt') { // Don't log auto-generated timestamps
+                    historyPromises.push(
+                        tx.taskHistory.create({
+                            data: {
+                                action: 'UPDATED',
+                                fieldName: field,
+                                oldValue: existingTask[field]?.toString() || null,
+                                newValue: newValue?.toString() || null,
+                                taskId,
+                                userId
+                            }
+                        })
+                    );
+                }
             }
+
+            await Promise.all(historyPromises);
+            await progressUpdatePromise;
 
             return result;
         });
 
-        res.status(200).json({ success: true, task: updatedTask });
+        res.status(200).json({
+            success: true,
+            message: 'Task updated successfully',
+            task: updatedTask
+        });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        console.error('Update task error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update task',
+            error: error.message
+        });
     }
 };
 
@@ -393,10 +546,40 @@ exports.createSubTask = async (req, res) => {
         const taskId = req.params.taskId;
         const userId = req.user.id;
 
-        // Check if user has access to the parent task
-        const parentTask = await accessService.checkTaskAccess(taskId, userId);
+        // Check if the parent task exists
+        const parentTask = await prisma.task.findUnique({ where: { id: taskId } });
+
         if (!parentTask) {
-            return res.status(404).json({ success: false, message: 'Parent task not found or access denied' });
+            return res.status(404).json({ success: false, message: 'Parent task not found' });
+        }
+
+        // Check permissions: only creator of parent task, team owner, or team admin can create subtasks
+        const isCreator = parentTask.creatorId === userId;
+        const isTaskAssignee = parentTask.assigneeId === userId;
+
+        let isTeamOwner = false;
+        let isTeamAdmin = false;
+
+        if (parentTask.teamId) {
+            const team = await prisma.team.findUnique({ where: { id: parentTask.teamId } });
+            if (team && team.ownerId === userId) {
+                isTeamOwner = true;
+            } else {
+                // Check if user is team admin
+                const membership = await prisma.teamMember.findUnique({
+                    where: {
+                        teamId_userId: {
+                            teamId: parentTask.teamId,
+                            userId: userId
+                        }
+                    }
+                });
+                isTeamAdmin = membership?.role === 'ADMIN';
+            }
+        }
+
+        if (!isCreator && !isTeamOwner && !isTeamAdmin && !isTaskAssignee) {
+            return res.status(403).json({ success: false, message: 'Unauthorized to create subtasks for this task' });
         }
 
         const { title, description, status, priority, assigneeId, dueDate } = req.body;
@@ -447,13 +630,7 @@ exports.updateSubTask = async (req, res) => {
         const taskId = req.params.taskId;
         const userId = req.user.id;
 
-        // Check if user has access to the parent task
-        const parentTask = await accessService.checkTaskAccess(taskId, userId);
-        if (!parentTask) {
-            return res.status(404).json({ success: false, message: 'Parent task not found or access denied' });
-        }
-
-        // Check if the subtask belongs to the parent task
+        // Check if the subtask exists and belongs to the parent task
         const existingSubTask = await prisma.subTask.findUnique({
             where: { id: subTaskId },
             include: { assignee: true }
@@ -463,17 +640,58 @@ exports.updateSubTask = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Subtask not found' });
         }
 
-        // Check permissions: only assignee, creator of parent task, or team owner can update
-        const isAssignee = existingSubTask.assigneeId === userId;
-        const isCreator = parentTask.creatorId === userId;
+        // Get the parent task details
+        const parentTask = await prisma.task.findUnique({
+            where: { id: taskId }
+        });
 
-        let isTeamOwner = false;
-        if (parentTask.teamId) {
-            const team = await prisma.team.findUnique({ where: { id: parentTask.teamId } });
-            if (team && team.ownerId === userId) isTeamOwner = true;
+        if (!parentTask) {
+            return res.status(404).json({ success: false, message: 'Parent task not found' });
         }
 
-        if (!isAssignee && !isCreator && !isTeamOwner) {
+        // DEBUG: Log the relevant information to help troubleshoot
+        console.log('DEBUG - Subtask update permissions:');
+        console.log('  Subtask ID:', subTaskId);
+        console.log('  Parent Task ID:', taskId);
+        console.log('  User ID:', userId);
+        console.log('  Existing Subtask assigneeId:', existingSubTask.assigneeId);
+        console.log('  Parent Task creatorId:', parentTask.creatorId);
+        console.log('  Parent Task teamId:', parentTask.teamId);
+        console.log('  Is Subtask Assignee:', existingSubTask.assigneeId === userId);
+        console.log('  Is Creator:', parentTask.creatorId === userId);
+
+        // Check permissions: only subtask assignee, creator of parent task, team owner, or team admin can update
+        const isSubtaskAssignee = existingSubTask.assigneeId && existingSubTask.assigneeId === userId;
+        const isCreator = parentTask.creatorId === userId;
+        const isTaskAssignee = parentTask.assigneeId === userId;
+
+        let isTeamOwner = false;
+        let isTeamAdmin = false;
+
+        if (parentTask.teamId) {
+            const team = await prisma.team.findUnique({ where: { id: parentTask.teamId } });
+            if (team && team.ownerId === userId) {
+                isTeamOwner = true;
+            } else {
+                // Check if user is team admin
+                const membership = await prisma.teamMember.findUnique({
+                    where: {
+                        teamId_userId: {
+                            teamId: parentTask.teamId,
+                            userId: userId
+                        }
+                    }
+                });
+                isTeamAdmin = membership?.role === 'ADMIN';
+            }
+        }
+
+        console.log('  Is Team Owner:', isTeamOwner);
+        console.log('  Is Team Admin:', isTeamAdmin);
+        console.log('  Is Task Assignee:', isTaskAssignee);
+        console.log('  Final permission check (any true):', isSubtaskAssignee || isCreator || isTeamOwner || isTeamAdmin || isTaskAssignee);
+
+        if (!isSubtaskAssignee && !isCreator && !isTeamOwner && !isTeamAdmin && !isTaskAssignee) {
             return res.status(403).json({ success: false, message: 'Unauthorized to update this subtask' });
         }
 
@@ -531,29 +749,49 @@ exports.deleteSubTask = async (req, res) => {
         const taskId = req.params.taskId;
         const userId = req.user.id;
 
-        // Check if user has access to the parent task
-        const parentTask = await accessService.checkTaskAccess(taskId, userId);
-        if (!parentTask) {
-            return res.status(404).json({ success: false, message: 'Parent task not found or access denied' });
-        }
-
-        // Check if the subtask belongs to the parent task
+        // Check if the subtask exists and belongs to the parent task
         const existingSubTask = await prisma.subTask.findUnique({ where: { id: subTaskId } });
 
         if (!existingSubTask || existingSubTask.taskId !== taskId) {
             return res.status(404).json({ success: false, message: 'Subtask not found' });
         }
 
-        // Only creator of parent task or team owner can delete subtasks
-        const isCreator = parentTask.creatorId === userId;
+        // Get the parent task details
+        const parentTask = await prisma.task.findUnique({
+            where: { id: taskId }
+        });
 
-        let isTeamOwner = false;
-        if (parentTask.teamId) {
-            const team = await prisma.team.findUnique({ where: { id: parentTask.teamId } });
-            if (team && team.ownerId === userId) isTeamOwner = true;
+        if (!parentTask) {
+            return res.status(404).json({ success: false, message: 'Parent task not found' });
         }
 
-        if (!isCreator && !isTeamOwner) {
+        // Check permissions: only subtask assignee, creator of parent task, team owner, or team admin can delete
+        const isSubtaskAssignee = existingSubTask.assigneeId && existingSubTask.assigneeId === userId;
+        const isCreator = parentTask.creatorId === userId;
+        const isTaskAssignee = parentTask.assigneeId === userId;
+
+        let isTeamOwner = false;
+        let isTeamAdmin = false;
+
+        if (parentTask.teamId) {
+            const team = await prisma.team.findUnique({ where: { id: parentTask.teamId } });
+            if (team && team.ownerId === userId) {
+                isTeamOwner = true;
+            } else {
+                // Check if user is team admin
+                const membership = await prisma.teamMember.findUnique({
+                    where: {
+                        teamId_userId: {
+                            teamId: parentTask.teamId,
+                            userId: userId
+                        }
+                    }
+                });
+                isTeamAdmin = membership?.role === 'ADMIN';
+            }
+        }
+
+        if (!isSubtaskAssignee && !isCreator && !isTeamOwner && !isTeamAdmin && !isTaskAssignee) {
             return res.status(403).json({ success: false, message: 'Unauthorized to delete this subtask' });
         }
 

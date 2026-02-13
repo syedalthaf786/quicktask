@@ -93,31 +93,124 @@ async function getTaskVisibilityFilter(userId) {
 }
 
 /**
- * Calculate permissions for a task based on user role
+ * Calculate detailed permissions for a task based on user role
  * @param {Object} task - Task object with team relationship
  * @param {string} userId - User ID
  * @returns {Promise<Object>} Permissions object
  */
 async function getTaskPermissions(task, userId) {
     let isTeamOwner = false;
+    let isTeamAdmin = false;
+    
     if (task.teamId) {
         const team = await prisma.team.findUnique({ where: { id: task.teamId } });
-        if (team && team.ownerId === userId) isTeamOwner = true;
+        if (team) {
+            isTeamOwner = team.ownerId === userId;
+            
+            if (!isTeamOwner) {
+                // Check if user is team admin
+                const membership = await prisma.teamMember.findUnique({
+                    where: {
+                        teamId_userId: {
+                            teamId: task.teamId,
+                            userId: userId
+                        }
+                    }
+                });
+                isTeamAdmin = membership?.role === 'ADMIN';
+            }
+        }
     }
 
     const isCreator = task.creatorId === userId;
     const isAssignee = task.assigneeId === userId;
-
+    
+    // Enhanced permission levels
+    const canEdit = isTeamOwner || isTeamAdmin || isCreator;
+    const canUpdateStatus = canEdit || isAssignee;
+    const canUpdateProgress = canUpdateStatus; // Assignees and above can update progress
+    const canUpdateAssignee = canEdit || (isAssignee && task.assigneeId === userId); // Assignees can reassign to themselves
+    const canDelete = isTeamOwner || isTeamAdmin || isCreator;
+    const canAssign = canEdit;
+    const canComment = true; // All authenticated users can comment
+    const canViewHistory = canEdit || isAssignee;
+    const canViewSubmissions = canEdit || isAssignee;
+    
     return {
-        canEdit: isTeamOwner || isCreator,
-        canUpdateStatus: isTeamOwner || isCreator || isAssignee,
-        canComment: true, // All authenticated users can comment
-        canDelete: isTeamOwner || isCreator,
-        canAssign: isTeamOwner || isCreator,
+        // Core permissions
+        canEdit,
+        canUpdateStatus,
+        canUpdateProgress,
+        canUpdateAssignee,
+        canDelete,
+        canAssign,
+        canComment,
+        canViewHistory,
+        canViewSubmissions,
+        
+        // Role indicators
         isOwner: isTeamOwner,
+        isAdmin: isTeamAdmin,
         isCreator,
-        isAssignee
+        isAssignee,
+        
+        // Permission details for debugging
+        permissionLevel: isTeamOwner ? 'OWNER' : 
+                        isTeamAdmin ? 'ADMIN' : 
+                        isCreator ? 'CREATOR' : 
+                        isAssignee ? 'ASSIGNEE' : 'VIEWER'
     };
+}
+
+/**
+ * Check field-level access for a specific user on a task
+ * @param {Object} task - Task object
+ * @param {string} userId - User ID
+ * @param {string} field - Field name to check access for
+ * @returns {Promise<boolean>} Whether user can access the field
+ */
+async function canAccessField(task, userId, field) {
+    const permissions = await getTaskPermissions(task, userId);
+    
+    const fieldAccessMap = {
+        'title': permissions.canEdit,
+        'description': permissions.canEdit,
+        'priority': permissions.canEdit,
+        'status': permissions.canUpdateStatus,
+        'dueDate': permissions.canEdit,
+        'assigneeId': permissions.canUpdateAssignee,
+        'teamId': permissions.canEdit,
+        'estimatedHours': permissions.canEdit,
+        'actualHours': permissions.canUpdateStatus,
+        'progress': permissions.canUpdateProgress,
+        'category': permissions.canEdit
+    };
+    
+    return fieldAccessMap[field] || false;
+}
+
+/**
+ * Log permission violation attempts
+ * @param {string} userId - User ID
+ * @param {string} taskId - Task ID
+ * @param {string} action - Action attempted
+ * @param {string} field - Field involved (optional)
+ */
+async function logPermissionViolation(userId, taskId, action, field = null) {
+    try {
+        await prisma.taskHistory.create({
+            data: {
+                action: 'PERMISSION_VIOLATION',
+                fieldName: field || 'access_denied',
+                oldValue: null,
+                newValue: `${action} attempted by user ${userId}`,
+                taskId,
+                userId
+            }
+        });
+    } catch (error) {
+        console.error('Failed to log permission violation:', error);
+    }
 }
 
 /**
@@ -147,5 +240,7 @@ module.exports = {
     isTeamAdminOrOwner,
     getTaskVisibilityFilter,
     getTaskPermissions,
-    checkBugAccess
+    checkBugAccess,
+    canAccessField,
+    logPermissionViolation
 };

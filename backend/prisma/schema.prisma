@@ -166,6 +166,11 @@ model Task {
   @@index([status, priority, category])
   @@index([teamId])
   @@index([assigneeId])
+  @@index([creatorId])
+  @@index([dueDate])
+  @@index([createdAt])
+  @@index([status, assigneeId])
+  @@index([teamId, status])
 }
 
 model DevelopmentTask {

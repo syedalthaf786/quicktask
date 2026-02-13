@@ -133,6 +133,25 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
         });
     };
 
+    // Function to handle bug deletion
+    const handleDeleteBug = async (bugId) => {
+        setConfirmAction({
+            title: 'Delete Bug Report',
+            message: 'Are you sure you want to delete this bug report? This action cannot be undone.',
+            onConfirm: async () => {
+                try {
+                    await taskService.deleteBugReport(bugId);
+                    toast.success('Bug report deleted successfully!');
+                    if (onRefresh) onRefresh();
+                    // If the deleted bug was selected, close the modal
+                    if (selectedBug?.id === bugId) setSelectedBug(null);
+                } catch (error) {
+                    toast.error('Failed to delete bug report: ' + error.message);
+                }
+            }
+        });
+    };
+
     const parseBugDescription = (bug) => {
         // Handle both old format (structured description) and new format (separate fields)
         if (!bug) return {};
@@ -542,10 +561,23 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
         );
     }
 
-    // For UI toggles, check if user is the global owner or has an appropriate role
+    // For UI toggles, check if user has appropriate permissions based on backend logic
     const currentMember = teamMembers?.find(m => m.user.id === currentUser?.id);
-    const isOwner = currentMember?.role === 'OWNER';
-    const isAssignee = task.assignee?.id === currentUser?.id;
+    const isTeamOwner = currentMember?.role === 'OWNER';
+    const isTeamAdmin = currentMember?.role === 'ADMIN';
+    const isTaskCreator = task.creatorId === currentUser?.id;
+    const isTaskAssignee = task.assignee?.id === currentUser?.id;
+    // Check if user is assignee of a specific subtask
+    const isSubtaskAssignee = (subtaskId) => {
+        // Find if this subtask has an assignee
+        if (task.subTasks) {
+            const subtask = task.subTasks.find(st => st.id === subtaskId);
+            return subtask?.assignee?.id === currentUser?.id;
+        }
+        return false;
+    };
+    // User can toggle subtask if they are owner, admin, task creator, task assignee, or specific subtask assignee
+    const canToggleSubtask = (subtaskId) => isTeamOwner || isTeamAdmin || isTaskCreator || isTaskAssignee || isSubtaskAssignee(subtaskId);
 
     return (
         <>
@@ -724,7 +756,7 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
 
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                                     {/* Assignment Control (Owner Only) */}
-                                    {isOwner ? (
+                                    {isTeamOwner ? (
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'white', padding: '4px 8px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                                             <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Assign To:</span>
                                             <select
@@ -794,7 +826,7 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
                                         width: '100%'
                                     }}>
                                         {/* Delete Button - Only for owners/creators */}
-                                        {(isOwner || task.creatorId === currentUser?.id) && onDelete && (
+                                        {(isTeamOwner || isTeamAdmin || task.creatorId === currentUser?.id) && onDelete && (
                                             <button
                                                 className="btn btn-outline btn-sm"
                                                 onClick={() => {
@@ -949,7 +981,7 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
                                             <AttachmentManager
                                                 taskId={task.id}
                                                 attachments={task.attachments || []}
-                                                readOnly={!isOwner && !task.assignee} // Allow owner or assignee to upload
+                                                readOnly={!isTeamOwner && !isTeamAdmin && !(task.creatorId === currentUser?.id) && !(task.assignee?.id === currentUser?.id)} // Allow owner, admin, creator or assignee to upload
                                             />
                                         </motion.div>
                                     )}
@@ -1102,6 +1134,32 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
                                                                     </div>
                                                                 </div>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                    {/* Delete Button - Only for Reporter, Assignee, Team Owner/Admin, or Task Creator */}
+                                                                    {(currentUser?.id === bug.reporter?.id ||
+                                                                        currentUser?.id === bug.assignee?.id ||
+                                                                        isTeamOwner ||
+                                                                        isTeamAdmin ||
+                                                                        task.creatorId === currentUser?.id) && (
+                                                                            <div
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleDeleteBug(bug.id);
+                                                                                }}
+                                                                                style={{
+                                                                                    padding: '4px',
+                                                                                    borderRadius: '4px',
+                                                                                    display: 'flex',
+                                                                                    alignItems: 'center',
+                                                                                    justifyContent: 'center',
+                                                                                    color: '#ef4444',
+                                                                                    transition: 'background 0.2s'
+                                                                                }}
+                                                                                className="hover-bg-red"
+                                                                                title="Delete Bug Report"
+                                                                            >
+                                                                                <Trash2 size={14} />
+                                                                            </div>
+                                                                        )}
                                                                     <span className="badge badge-sm" style={{
                                                                         background: bug.status === 'RESOLVED' ? '#dcfce7' : bug.status === 'IN_PROGRESS' ? '#fef3c7' : '#fecaca',
                                                                         color: bug.status === 'RESOLVED' ? '#14532d' : bug.status === 'IN_PROGRESS' ? '#92400e' : '#991b1b',
@@ -1148,7 +1206,7 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
                                                 ) : (modules[activeModule].tasks || modules[activeModule].test_cases || []).map((item, cIdx) => {
                                                     const isSubTask = modules[activeModule].matchSubTasks;
                                                     const label = isSubTask ? item.title : item;
-                                                    const canToggle = isSubTask ? (isOwner || (item.assignee?.id === currentUser?.id)) : true;
+                                                    const canToggle = isSubTask ? canToggleSubtask(item.id) : true;
 
                                                     // For subtasks, check status. For regular items, check local state.
                                                     const isChecked = isSubTask
@@ -1158,7 +1216,7 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
                                                     return (
                                                         <motion.div
                                                             key={`${activeModule}-${cIdx}`}
-                                                            whileHover={{ scale: 1.01, background: isChecked ? 'rgba(16, 185, 129, 0.08)' : 'rgba(var(--primary-rgb), 0.03)' }}
+                                                            whileHover={{ scale: 1.01, background: isChecked ? 'rgba(16, 185, 129, 0.08)' : 'rgba(99, 102, 241, 0.03)' }}
                                                             whileTap={{ scale: 0.99 }}
                                                             onClick={() => {
                                                                 if (isSubTask) {
@@ -1252,7 +1310,7 @@ const SmartTaskCard = ({ task, onRefresh, teamMembers, currentUser, onAssign, on
                                                                     )}
 
                                                                     {/* Subtask Delete - Only show for owners */}
-                                                                    {isSubTask && isOwner && (
+                                                                    {isSubTask && (isTeamOwner || isTeamAdmin || task.creatorId === currentUser?.id || isTaskAssignee) && (
                                                                         <button
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();

@@ -2,7 +2,7 @@
 import api from './api';
 
 export const taskService = {
-    // Get all tasks with optional filters
+    // Get all tasks with optional filters and pagination
     getTasks: async (filters = {}) => {
         const params = new URLSearchParams();
 
@@ -12,6 +12,8 @@ export const taskService = {
         if (filters.search) params.append('search', filters.search);
         if (filters.sortBy) params.append('sortBy', filters.sortBy);
         if (filters.order) params.append('order', filters.order);
+        if (filters.page) params.append('page', filters.page);
+        if (filters.limit) params.append('limit', filters.limit);
 
         const response = await api.get(`/tasks?${params.toString()}`);
         return response.data;
@@ -31,14 +33,61 @@ export const taskService = {
 
     // Update task
     updateTask: async (id, taskData) => {
-        const response = await api.put(`/tasks/${id}`, taskData);
-        return response.data;
+        try {
+            const response = await api.put(`/tasks/${id}`, taskData);
+            return response.data;
+        } catch (error) {
+            // Enhanced error handling with detailed messages
+            if (error.response) {
+                const { status, data } = error.response;
+                switch (status) {
+                    case 400:
+                        throw new Error(data?.message || 'Invalid request data');
+                    case 401:
+                        throw new Error('Authentication required');
+                    case 403:
+                        throw new Error('Insufficient permissions');
+                    case 404:
+                        throw new Error('Task not found');
+                    case 429:
+                        throw new Error('Too many requests. Please try again later.');
+                    default:
+                        throw new Error(data?.message || `Server error (${status})`);
+                }
+            } else if (error.request) {
+                throw new Error('Network error. Please check your connection.');
+            } else {
+                throw new Error('An unexpected error occurred');
+            }
+        }
     },
 
     // Update task progress (for checkboxes)
     updateTaskProgress: async (id, progress) => {
-        const response = await api.put(`/tasks/${id}`, { progress });
-        return response.data;
+        try {
+            const response = await api.put(`/tasks/${id}`, { progress });
+            return response.data;
+        } catch (error) {
+            if (error.response) {
+                const { status, data } = error.response;
+                switch (status) {
+                    case 400:
+                        throw new Error(data?.message || 'Invalid progress data');
+                    case 401:
+                        throw new Error('Authentication required');
+                    case 403:
+                        throw new Error('Insufficient permissions to update progress');
+                    case 404:
+                        throw new Error('Task not found');
+                    default:
+                        throw new Error(data?.message || `Failed to update progress (${status})`);
+                }
+            } else if (error.request) {
+                throw new Error('Network error. Please check your connection.');
+            } else {
+                throw new Error('An unexpected error occurred while updating progress');
+            }
+        }
     },
 
     // Update specialized category data (Dev, QA, etc.)
